@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Tickets - Iris{% endblock %}
+{% block content %}
+<section class="space-y-4">
+  <header class="flex items-end justify-between">
+    <div>
+      <h1 class="text-xl font-semibold text-slate-900">Tickets</h1>
+      <p class="text-sm text-slate-500">Refresca cada 15 segundos.</p>
+    </div>
+  </header>
+
+  <div
+    id="tickets-board"
+    hx-get="/tickets"
+    hx-trigger="every 15s"
+    hx-target="#tickets-board"
+    hx-swap="innerHTML"
+  >
+    {% include "_partials/tickets_columns.html" %}
+  </div>
+</section>
+{% endblock %}

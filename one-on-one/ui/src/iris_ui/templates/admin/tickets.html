@@ -1,0 +1,21 @@
+{% extends "admin/_layout.html" %}
+{% block crumb %} · Tickets{% endblock %}
+
+{% block admin_content %}
+<div class="flex items-center justify-between mb-4">
+  <h1 class="text-xl font-semibold">Tickets en vivo</h1>
+  <div class="text-xs text-slate-500">polling cada 8s</div>
+</div>
+
+<div id="tickets-root"
+     hx-get="/admin/tickets"
+     hx-trigger="every 8s"
+     hx-target="#tickets-root"
+     hx-swap="outerHTML">
+  {% include "admin/_partials/tickets_kanban.html" %}
+</div>
+
+<div id="ticket-drawer"
+     class="fixed inset-y-0 right-0 w-full max-w-xl bg-white shadow-2xl border-l z-40 transform translate-x-full transition-transform duration-200">
+</div>
+{% endblock %}

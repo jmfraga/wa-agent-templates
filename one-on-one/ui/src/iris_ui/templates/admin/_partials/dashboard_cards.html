@@ -1,0 +1,57 @@
+{# Cards de metricas + health strip. Renderizado tanto en full page como en polling HTMX. #}
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+  <div class="rounded-lg border bg-white shadow-sm p-4">
+    <div class="text-xs text-slate-500">Tickets pending</div>
+    <div class="text-2xl font-semibold mt-1">
+      {{ (tickets_by_status.get('open', 0) + tickets_by_status.get('awaiting_jmf', 0)) }}
+    </div>
+    <div class="text-xs text-slate-500 mt-1">
+      open {{ tickets_by_status.get('open', 0) }} ·
+      awaiting OWNER {{ tickets_by_status.get('awaiting_jmf', 0) }}
+    </div>
+  </div>
+
+  <div class="rounded-lg border bg-white shadow-sm p-4">
+    <div class="text-xs text-slate-500">Crisis hoy</div>
+    <div class="text-2xl font-semibold mt-1 {% if metrics.get('crisis_today', 0) > 0 %}text-rose-600{% endif %}">
+      {{ metrics.get('crisis_today', 0) }}
+    </div>
+  </div>
+
+  <div class="rounded-lg border bg-white shadow-sm p-4">
+    <div class="text-xs text-slate-500">Tokens hoy</div>
+    <div class="text-2xl font-semibold mt-1">
+      {{ '{:,}'.format(metrics.get('tokens_total', 0)) }}
+    </div>
+    <div class="text-xs text-slate-500 mt-1">
+      in {{ metrics.get('tokens_in', 0) }} · out {{ metrics.get('tokens_out', 0) }}
+    </div>
+  </div>
+
+  <div class="rounded-lg border bg-white shadow-sm p-4">
+    <div class="text-xs text-slate-500">Costo USD hoy</div>
+    <div class="text-2xl font-semibold mt-1">
+      ${{ '%.2f' % (metrics.get('cost_usd_today', 0) or 0) }}
+    </div>
+  </div>
+</div>
+
+<div class="mt-6 rounded-lg border bg-white shadow-sm p-4">
+  <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Health</div>
+  <div class="flex flex-wrap gap-3 text-sm">
+    {% for c in (health.get('components') or []) %}
+      <div class="flex items-center gap-2">
+        <span class="inline-block w-2 h-2 rounded-full
+                     {% if c.get('ok') %}bg-emerald-500{% else %}bg-rose-500{% endif %}"></span>
+        <span class="font-medium">{{ c.get('name') }}</span>
+        {% if not c.get('ok') %}
+          <span class="text-xs text-rose-600">{{ c.get('error') or 'down' }}</span>
+        {% endif %}
+      </div>
+    {% else %}
+      <span class="text-slate-500 text-sm">Sin datos de health.</span>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="mt-6 text-xs text-slate-400">Refresca cada 15s</div>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Iris{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2"></script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <nav class="border-b border-slate-200 bg-white">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-6">
+      <a href="/" class="font-semibold text-slate-900">Iris</a>
+      <div class="flex gap-4 text-sm text-slate-600">
+        <a href="/" class="hover:text-slate-900">Directorio</a>
+        <a href="/tickets" class="hover:text-slate-900">Tickets</a>
+        <a href="/courses" class="hover:text-slate-900">Cursos</a>
+        <a href="/admin/health" class="hover:text-slate-900">Health</a>
+        <a href="/admin" class="ml-auto text-slate-900 font-medium hover:text-slate-700">Admin</a>
+      </div>
+    </div>
+  </nav>
+
+  {% if brain_offline %}
+  <div class="bg-red-600 text-white text-sm">
+    <div class="max-w-6xl mx-auto px-4 py-2">
+      Brain offline. Mostrando datos vacios. Revisa el daemon en {{ request.url.scheme }}://localhost:8096.
+    </div>
+  </div>
+  {% endif %}
+
+  <main class="max-w-6xl mx-auto px-4 py-6">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

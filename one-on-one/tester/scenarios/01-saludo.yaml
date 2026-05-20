@@ -1,0 +1,15 @@
+# Smalltalk: paciente saluda, Iris responde sin abrir ticket ni escalar.
+name: "Saludo / smalltalk básico"
+phone: "+5215550000001"
+name_contact: "Tester Saludos"
+steps:
+  - send: "Hola buenas tardes"
+    expect:
+      intent: saludo_smalltalk
+      ticket_created: false
+      reply_contains: ["hola"]
+
+  - send: "Solo quería saludar, gracias"
+    expect:
+      intent: saludo_smalltalk
+      ticket_created: false

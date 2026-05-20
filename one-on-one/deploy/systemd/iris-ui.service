@@ -1,0 +1,18 @@
+[Unit]
+Description=Iris v2 UI (FastAPI :8097)
+After=network-online.target iris-brain.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iris
+WorkingDirectory=/opt/iris/ui
+EnvironmentFile=/opt/iris/ui/.env
+ExecStart=/opt/iris/ui/.venv/bin/uvicorn iris_ui.server:app --host 0.0.0.0 --port 8097
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/iris-ui.log
+StandardError=append:/var/log/iris-ui.log
+
+[Install]
+WantedBy=multi-user.target

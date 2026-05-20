@@ -1,0 +1,12 @@
+{% extends "admin/_layout.html" %}
+{% block crumb %} · Dashboard{% endblock %}
+
+{% block admin_content %}
+<div id="dashboard-root"
+     hx-get="/admin"
+     hx-trigger="every 15s"
+     hx-target="#dashboard-root"
+     hx-swap="outerHTML">
+  {% include "admin/_partials/dashboard_cards.html" %}
+</div>
+{% endblock %}

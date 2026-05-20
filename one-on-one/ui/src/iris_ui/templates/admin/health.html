@@ -1,0 +1,17 @@
+{% extends "admin/_layout.html" %}
+{% block crumb %} · Health{% endblock %}
+
+{% block admin_content %}
+<div class="flex items-center justify-between mb-4">
+  <h1 class="text-xl font-semibold">Health</h1>
+  <div class="text-xs text-slate-500">auto-refresh cada 10s</div>
+</div>
+
+<div id="health-root"
+     hx-get="/admin/health"
+     hx-trigger="every 10s"
+     hx-target="#health-root"
+     hx-swap="outerHTML">
+  {% include "admin/_partials/health_table.html" %}
+</div>
+{% endblock %}

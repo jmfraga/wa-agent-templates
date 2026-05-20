@@ -1,0 +1,21 @@
+# Paciente quiere agendar consulta. Iris NO agenda directo: abre ticket
+# para OWNER, le confirma al paciente que va a checar disponibilidad. OWNER
+# responde async, el ticket pasa a awaiting_patient.
+name: "Consulta de cita básica"
+phone: "+5215550000002"
+name_contact: "María Tester"
+steps:
+  - send: "Hola buenas tardes"
+    expect:
+      intent: saludo_smalltalk
+      ticket_created: false
+
+  - send: "Me gustaría agendar una consulta con el doctor"
+    expect:
+      intent: consulta_cita
+      ticket_created: true
+      reply_contains: ["doctor"]
+
+  - jmf_reply: "Sí claro, tengo lunes 19 a las 4pm o miércoles 21 a las 10am. ¿Cuál prefieres?"
+    expect:
+      ticket_status: awaiting_patient

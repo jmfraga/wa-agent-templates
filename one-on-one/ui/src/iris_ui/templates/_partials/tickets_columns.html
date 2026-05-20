@@ -1,0 +1,26 @@
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+  {% for status in statuses %}
+  <div class="bg-slate-100 rounded-lg p-3">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-600">{{ status }}</h2>
+      <span class="text-xs text-slate-500">{{ columns[status]|length }}</span>
+    </div>
+    <ul class="space-y-2">
+      {% for t in columns[status] %}
+      <li class="bg-white border border-slate-200 rounded-lg shadow-sm p-3">
+        <div class="text-sm font-medium text-slate-800">{{ t.title or t.summary or "(sin titulo)" }}</div>
+        <div class="text-xs text-slate-500 mt-1">#{{ t.id }}</div>
+        {% if t.contact_phone %}
+        <a href="/contact/{{ t.contact_phone }}" class="text-xs text-slate-600 underline hover:text-slate-900">
+          {{ t.contact_name or t.contact_phone }}
+        </a>
+        {% endif %}
+        <div class="text-[10px] text-slate-400 mt-1">{{ t.updated_at or t.created_at or "" }}</div>
+      </li>
+      {% else %}
+      <li class="text-xs text-slate-400 italic">vacio</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endfor %}
+</div>

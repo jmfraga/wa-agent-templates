@@ -1,0 +1,50 @@
+{% set kind_icons = {
+  'saludo_smalltalk': 'message-circle',
+  'consulta_cita': 'calendar',
+  'info_curso': 'book-open',
+  'urgencia_clinica': 'siren',
+  'seguimiento': 'repeat',
+  'facturacion': 'receipt',
+  'agradecimiento': 'heart',
+  'otro': 'help-circle',
+} %}
+{% set status_labels = {
+  'open': 'Open',
+  'awaiting_jmf': 'Awaiting OWNER',
+  'awaiting_patient': 'Awaiting Patient',
+  'closed': 'Closed',
+} %}
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+  {% for status in statuses %}
+    <div class="rounded-lg border bg-slate-100 p-3">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-sm font-semibold">{{ status_labels[status] }}</h3>
+        <span class="text-xs text-slate-500">{{ (columns.get(status) or [])|length }}</span>
+      </div>
+      <div class="space-y-2">
+        {% for t in (columns.get(status) or []) %}
+          <div class="rounded-md border bg-white shadow-sm p-3 cursor-pointer hover:bg-slate-50"
+               hx-get="/admin/tickets/{{ t.get('id') }}"
+               hx-target="#ticket-drawer"
+               hx-swap="innerHTML"
+               _="on htmx:afterSwap from elsewhere if event.detail.target.id is 'ticket-drawer' then remove .translate-x-full from #ticket-drawer end">
+            <div class="flex items-center gap-2 mb-1">
+              <i data-lucide="{{ kind_icons.get(t.get('kind'), 'tag') }}" class="w-4 h-4 text-slate-600"></i>
+              <span class="text-xs text-slate-500">{{ t.get('kind') }}</span>
+              {% if t.get('urgent') %}
+                <span class="ml-auto text-xs bg-rose-600 text-white px-1.5 rounded">URGENT</span>
+              {% endif %}
+            </div>
+            <div class="text-sm text-slate-800 line-clamp-2">{{ t.get('summary') or '(sin resumen)' }}</div>
+            <div class="text-xs text-slate-500 mt-1">
+              {{ t.get('contact_name') or t.get('contact_phone') or '?' }} ·
+              <span title="{{ t.get('created_at') }}">{{ t.get('elapsed') or t.get('created_at') or '' }}</span>
+            </div>
+          </div>
+        {% else %}
+          <div class="text-xs text-slate-400 italic">vacio</div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endfor %}
+</div>

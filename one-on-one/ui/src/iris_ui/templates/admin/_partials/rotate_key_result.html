@@ -1,0 +1,10 @@
+{% if result.get('ok') %}
+  <div class="rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm p-3">
+    Rotada y validada con <code>{{ result.get('model_test_used') }}</code>.
+    Nueva key: <code>{{ result.get('masked') }}</code> · validada {{ result.get('validated_at') }}.
+  </div>
+{% else %}
+  <div class="rounded-md bg-rose-50 border border-rose-200 text-rose-800 text-sm p-3">
+    Error: {{ result.get('error') or 'no se pudo validar la key' }}
+  </div>
+{% endif %}

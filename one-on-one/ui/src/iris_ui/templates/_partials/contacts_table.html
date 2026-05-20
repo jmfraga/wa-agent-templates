@@ -1,0 +1,67 @@
+<div class="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+  <table class="min-w-full text-sm">
+    <thead class="bg-slate-100 text-slate-600">
+      <tr>
+        <th class="text-left px-4 py-2 font-medium">Telefono</th>
+        <th class="text-left px-4 py-2 font-medium">Nombre</th>
+        <th class="text-left px-4 py-2 font-medium">Kind</th>
+        <th class="text-left px-4 py-2 font-medium">Last seen</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+      {% for c in contacts %}
+      <tr class="hover:bg-slate-50 cursor-pointer" onclick="window.location='/contact/{{ c.phone }}'">
+        <td class="px-4 py-2 font-mono text-slate-700">+{{ c.phone }}</td>
+        <td class="px-4 py-2">{{ c.name or "-" }}</td>
+        <td class="px-4 py-2">
+          {% set kind = c.kind or "otro" %}
+          <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs
+            {% if kind == 'owner' %}bg-yellow-100 text-yellow-800 ring-1 ring-yellow-300
+            {% elif kind == 'paciente' %}bg-rose-50 text-rose-700
+            {% elif kind == 'prospecto_curso' %}bg-emerald-50 text-emerald-700
+            {% elif kind == 'colega' %}bg-sky-50 text-sky-700
+            {% elif kind == 'asesoria' %}bg-indigo-50 text-indigo-700
+            {% elif kind == 'amigo' %}bg-amber-50 text-amber-700
+            {% elif kind == 'familia' %}bg-fuchsia-50 text-fuchsia-700
+            {% else %}bg-slate-100 text-slate-600{% endif %}">
+            {% set emoji = {'owner':'👑','paciente':'🩺','prospecto_curso':'🎓','colega':'🧑‍⚕️','asesoria':'💼','amigo':'🤝','familia':'👨‍👩‍👦','otro':'📩'} %}
+            {{ emoji.get(kind, '') }} {{ kind }}
+          </span>
+        </td>
+        <td class="px-4 py-2 text-slate-500 text-xs">{{ (c.last_seen or "")[:10] or "-" }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4" class="px-4 py-8 text-center text-slate-400">Sin contactos.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if total is not none %}
+{% set page_size = 50 %}
+{% set last_page = ((total - 1) // page_size) + 1 if total else 1 %}
+{% set qs %}q={{ q|default('') }}&kind={{ kind|default('') }}&sort={{ sort|default('name') }}{% endset %}
+<div class="flex items-center justify-between mt-3 text-sm">
+  <div class="text-xs text-slate-500">
+    Mostrando {{ contacts|length }} de {{ total }} contactos · Página {{ page }} de {{ last_page }}
+  </div>
+  <div class="flex gap-1">
+    {% if page > 1 %}
+    <a href="/?{{ qs }}&page={{ page - 1 }}"
+       hx-get="/?{{ qs }}&page={{ page - 1 }}" hx-target="#contacts-table"
+       class="px-3 py-1 rounded-md border border-slate-300 bg-white hover:bg-slate-50">← Anterior</a>
+    {% else %}
+    <span class="px-3 py-1 rounded-md border border-slate-200 bg-slate-50 text-slate-400">← Anterior</span>
+    {% endif %}
+    {% if page < last_page %}
+    <a href="/?{{ qs }}&page={{ page + 1 }}"
+       hx-get="/?{{ qs }}&page={{ page + 1 }}" hx-target="#contacts-table"
+       class="px-3 py-1 rounded-md border border-slate-300 bg-white hover:bg-slate-50">Siguiente →</a>
+    {% else %}
+    <span class="px-3 py-1 rounded-md border border-slate-200 bg-slate-50 text-slate-400">Siguiente →</span>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
