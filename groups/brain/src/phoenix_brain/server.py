@@ -445,6 +445,12 @@ def _ingest_system_prompt(kb: KnowledgeBase, instructions: Optional[str]) -> str
 
 
 def _persist_proposed_facts(kb: KnowledgeBase, facts: list[dict], mode: str) -> list[int]:
+    """Persiste facts proposed por el extractor. Comportamiento:
+    - mode='active': supersede el active anterior con la misma key.
+    - mode='pending_review': supersede el pending_review anterior con la misma
+      key (evita stack de duplicados al re-ingerir la misma URL/PDF).
+    En ambos casos crea una nueva versión incremental.
+    """
     status = "active" if mode == "active" else "pending_review"
     source = "jmf" if mode == "active" else "auto"
     saved_ids: list[int] = []
@@ -454,20 +460,31 @@ def _persist_proposed_facts(kb: KnowledgeBase, facts: list[dict], mode: str) -> 
             value = (f.get("value") or "").strip()
             if not key or not value:
                 continue
-            existing = s.execute(
-                select(KbFact)
-                .where(KbFact.kb_id == kb.id, KbFact.key == key, KbFact.status == "active")
-                .order_by(KbFact.version.desc())
-            ).scalar_one_or_none()
-            version = (existing.version + 1) if existing else 1
-            if existing and status == "active":
-                existing.status = "superseded"
+            # Para versionado: tomamos el max version de cualquier estado.
+            max_v = s.execute(
+                select(func.max(KbFact.version)).where(KbFact.kb_id == kb.id, KbFact.key == key)
+            ).scalar() or 0
+            # Si ya existe un fact activo y vamos a insertar uno active → supersede.
+            if status == "active":
+                active_existing = s.execute(
+                    select(KbFact).where(KbFact.kb_id == kb.id, KbFact.key == key, KbFact.status == "active")
+                ).scalar_one_or_none()
+                if active_existing:
+                    active_existing.status = "superseded"
+            else:
+                # pending_review: supersede cualquier pending_review previo del mismo key
+                # para no acumular duplicados si re-ingieres el mismo recurso.
+                prev_pending = s.execute(
+                    select(KbFact).where(KbFact.kb_id == kb.id, KbFact.key == key, KbFact.status == "pending_review")
+                ).scalars().all()
+                for pp in prev_pending:
+                    pp.status = "superseded"
             new_fact = KbFact(
                 kb_id=kb.id,
                 key=key,
                 value=value,
                 source=source,
-                version=version,
+                version=max_v + 1,
                 status=status,
             )
             s.add(new_fact)
