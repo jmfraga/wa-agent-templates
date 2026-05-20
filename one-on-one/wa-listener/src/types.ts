@@ -26,7 +26,7 @@ export interface RelaySendRequest {
   text: string;
 }
 
-export interface JmfReplyRequest {
+export interface OwnerReplyRequest {
   ticket_id: string;
   contact_phone: string;
   text: string;

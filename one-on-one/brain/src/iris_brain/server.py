@@ -60,7 +60,7 @@ class ChatRequest(BaseModel):
     real_phone: str | None = None
 
 
-class JMFReplyRequest(BaseModel):
+class OwnerReplyRequest(BaseModel):
     ticket_id: int
     body: str
 
@@ -69,7 +69,7 @@ class KbFactUpsert(BaseModel):
     kb_slug: str
     key: str
     value: str
-    source: KbFactSource = KbFactSource.jmf
+    source: KbFactSource = KbFactSource.owner
     ttl_days: int | None = None
 
 
@@ -85,7 +85,7 @@ def health() -> dict[str, Any]:
         "model_safety": settings.IRIS_BRAIN_MODEL_SAFETY,
         "port": settings.IRIS_BRAIN_PORT,
         "soul_size": len(soul.soul_text()),
-        "relay_configured": bool(settings.JMF_RELAY_WEBHOOK),
+        "relay_configured": bool(settings.OWNER_RELAY_WEBHOOK),
         "contact_relay_configured": bool(settings.CONTACT_RELAY_WEBHOOK),
     }
 
@@ -207,19 +207,19 @@ def owner_instruct(req: OwnerInstructRequest) -> dict[str, Any]:
     return {**result, "source": req.source}
 
 
-@app.post("/jmf/reply")
-def jmf_reply(req: JMFReplyRequest) -> dict[str, Any]:
+@app.post("/owner/reply")
+def owner_reply(req: OwnerReplyRequest) -> dict[str, Any]:
     """OWNER responde a un ticket; mandamos la respuesta al contacto vía relay."""
     with get_session() as s:
         t = s.get(Ticket, req.ticket_id)
         if t is None:
             raise HTTPException(404, "ticket no existe")
-        t.jmf_response = req.body
+        t.owner_response = req.body
         t.status = TicketStatus.awaiting_patient
         thread_id = t.thread_id
     relay_result = get_relay().send_to_contact(thread_id, req.body)
     # Persistir la salida en messages también.
-    sessions.append_message(thread_id, MessageDirection.out, req.body, model_used="jmf_manual")
+    sessions.append_message(thread_id, MessageDirection.out, req.body, model_used="owner_manual")
     return {"ok": True, "ticket_id": req.ticket_id, "relay": relay_result}
 
 
@@ -230,8 +230,8 @@ def _ticket_dict(t: Ticket) -> dict[str, Any]:
         "kind": t.kind,
         "summary": t.summary,
         "status": t.status.value,
-        "draft_for_jmf": t.draft_for_jmf,
-        "jmf_response": t.jmf_response,
+        "draft_for_owner": t.draft_for_owner,
+        "owner_response": t.owner_response,
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,
     }
@@ -280,7 +280,7 @@ class TicketStatusUpdate(BaseModel):
 
 @app.post("/tickets/{ticket_id}/status")
 def set_ticket_status(ticket_id: int, req: TicketStatusUpdate) -> dict[str, Any]:
-    """Cambia el status arbitrariamente (open/awaiting_jmf/awaiting_patient/closed)."""
+    """Cambia el status arbitrariamente (open/awaiting_owner/awaiting_patient/closed)."""
     from datetime import datetime, timezone
     try:
         new_status = TicketStatus(req.status)
@@ -696,8 +696,8 @@ def admin_tickets_live(since: str | None = None) -> dict[str, Any]:
 
 @app.post("/admin/tickets/{ticket_id}/reply", dependencies=[Depends(require_admin)])
 def admin_ticket_reply(ticket_id: int, req: TicketReplyRequest) -> dict[str, Any]:
-    """Wrap de /jmf/reply con close_after opcional."""
-    result = jmf_reply(JMFReplyRequest(ticket_id=ticket_id, body=req.body))
+    """Wrap de /owner/reply con close_after opcional."""
+    result = owner_reply(OwnerReplyRequest(ticket_id=ticket_id, body=req.body))
     if req.close_after:
         try:
             admin_mod.close_ticket(ticket_id)

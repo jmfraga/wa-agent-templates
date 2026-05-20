@@ -3,7 +3,7 @@
 Sprint 2 reveló divergencias entre la migración inicial 0001 (escrita por agente C)
 y el ORM en iris_brain.models (escrito por agente B):
 
-- tickets: ORM tiene draft_for_jmf, migración no. Lo agregamos.
+- tickets: ORM tiene draft_for_owner, migración no. Lo agregamos.
 - kb_facts: ORM ahora tiene ttl_days (no ttl). Ya estaba bien en migración.
 - threads: el CHECK ck_threads_status se ajusta a 'open|closed' (no active|closed).
   Ya se ajustó vía ALTER manual; aquí lo dejamos versionado para futuras DBs limpias.
@@ -24,10 +24,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # tickets.draft_for_jmf
+    # tickets.draft_for_owner
     op.add_column(
         "tickets",
-        sa.Column("draft_for_jmf", sa.Text(), nullable=True),
+        sa.Column("draft_for_owner", sa.Text(), nullable=True),
     )
 
     # Realinear CHECK de threads.status: 'open|closed' (no 'active|closed')
@@ -40,7 +40,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("tickets", "draft_for_jmf")
+    op.drop_column("tickets", "draft_for_owner")
     op.drop_constraint("ck_threads_status", "threads", type_="check")
     op.create_check_constraint(
         "ck_threads_status",

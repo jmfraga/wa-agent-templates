@@ -27,7 +27,7 @@ class TicketTelegramMap(Base):
     message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     thread_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="awaiting_jmf")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="awaiting_owner")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
@@ -54,7 +54,7 @@ class StateStore:
         message_id: int,
         thread_id: Optional[int] = None,
         kind: Optional[str] = None,
-        status: str = "awaiting_jmf",
+        status: str = "awaiting_owner",
     ) -> TicketTelegramMap:
         with self.session() as s:
             row = s.get(TicketTelegramMap, ticket_id)
@@ -118,6 +118,6 @@ class StateStore:
     def count_pending(self) -> int:
         with self.session() as s:
             stmt = select(TicketTelegramMap).where(
-                TicketTelegramMap.status.in_(("awaiting_jmf", "awaiting_reply"))
+                TicketTelegramMap.status.in_(("awaiting_owner", "awaiting_reply"))
             )
             return len(s.execute(stmt).scalars().all())

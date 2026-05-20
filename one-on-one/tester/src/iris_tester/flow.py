@@ -4,7 +4,7 @@ Lee un YAML con secuencia de pasos y assertions, ejecuta contra el brain
 y reporta resultado. Cada paso es:
 
   - `send: "texto"` → POST /chat
-  - `jmf_reply: "texto"` → POST /jmf/reply (simula a OWNER contestando)
+  - `owner_reply: "texto"` → POST /owner/reply (simula a OWNER contestando)
   - `expect:` con keys: intent, ticket_created, reply_contains, ticket_status
 
 Ejemplo de uso programático:
@@ -31,7 +31,7 @@ console = Console()
 @dataclass
 class StepResult:
     step_index: int
-    kind: str  # "send" | "jmf_reply"
+    kind: str  # "send" | "owner_reply"
     ok: bool
     failures: list[str] = field(default_factory=list)
     detail: dict[str, Any] = field(default_factory=dict)
@@ -112,7 +112,7 @@ def _post_chat(client: httpx.Client, brain_url: str, phone: str, name: str, text
     return r.json()
 
 
-def _post_jmf_reply(
+def _post_owner_reply(
     client: httpx.Client, brain_url: str, ticket_id: str, contact_phone: str, body: str
 ) -> dict:
     payload = {
@@ -120,7 +120,7 @@ def _post_jmf_reply(
         "contact_phone": contact_phone,
         "text": body,
     }
-    r = client.post(f"{brain_url}/jmf/reply", json=payload)
+    r = client.post(f"{brain_url}/owner/reply", json=payload)
     r.raise_for_status()
     return r.json()
 
@@ -137,7 +137,7 @@ def _get_ticket(client: httpx.Client, brain_url: str, ticket_id: str) -> Optiona
 def run_scenario(
     yaml_path: str | Path,
     brain_url: str,
-    auto_jmf_response: Optional[str] = None,
+    auto_owner_response: Optional[str] = None,
     settle_ms: int = 250,
 ) -> ScenarioResult:
     """Ejecuta un escenario YAML.
@@ -145,9 +145,9 @@ def run_scenario(
     Args:
         yaml_path: ruta al YAML.
         brain_url: brain base URL.
-        auto_jmf_response: si se da, cualquier ticket abierto recibe esta
-            respuesta automáticamente vía POST /jmf/reply (override del
-            campo `jmf_reply` del YAML).
+        auto_owner_response: si se da, cualquier ticket abierto recibe esta
+            respuesta automáticamente vía POST /owner/reply (override del
+            campo `owner_reply` del YAML).
         settle_ms: pausa entre pasos para que el brain procese.
     """
     data = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8"))
@@ -195,12 +195,12 @@ def run_scenario(
                 if failures:
                     result.ok = False
 
-            elif "jmf_reply" in step:
-                body = auto_jmf_response or step["jmf_reply"]
+            elif "owner_reply" in step:
+                body = auto_owner_response or step["owner_reply"]
                 if not current_ticket_id:
                     sr = StepResult(
                         idx,
-                        "jmf_reply",
+                        "owner_reply",
                         ok=False,
                         failures=["no current ticket to reply to"],
                     )
@@ -208,11 +208,11 @@ def run_scenario(
                     result.ok = False
                     continue
                 try:
-                    resp = _post_jmf_reply(
+                    resp = _post_owner_reply(
                         client, brain_url, current_ticket_id, phone, body
                     )
                 except httpx.HTTPError as err:
-                    sr = StepResult(idx, "jmf_reply", ok=False, failures=[f"HTTP: {err}"])
+                    sr = StepResult(idx, "owner_reply", ok=False, failures=[f"HTTP: {err}"])
                     result.steps.append(sr)
                     result.ok = False
                     continue
@@ -221,7 +221,7 @@ def run_scenario(
                 failures = _check_expect(expect, resp, ticket_obj)
                 sr = StepResult(
                     idx,
-                    "jmf_reply",
+                    "owner_reply",
                     ok=not failures,
                     failures=failures,
                     detail={"response": resp, "ticket": ticket_obj},

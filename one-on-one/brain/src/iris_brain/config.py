@@ -38,8 +38,8 @@ class Settings(BaseSettings):
 
     # --- Relays ---
     # Sprint 2 frozen decision: tickets a OWNER van por Telegram bot dedicado.
-    # JMF_RELAY_WEBHOOK = relay-bot Telegram (brain → OWNER).
-    JMF_RELAY_WEBHOOK: str | None = "http://localhost:8098/send-to-jmf"
+    # OWNER_RELAY_WEBHOOK = relay-bot Telegram (brain → OWNER).
+    OWNER_RELAY_WEBHOOK: str | None = "http://localhost:8098/send-to-owner"
     # CONTACT_RELAY_WEBHOOK = wa-listener (brain → paciente vía WhatsApp).
     CONTACT_RELAY_WEBHOOK: str | None = "http://localhost:8099/send-to-contact"
 

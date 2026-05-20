@@ -251,15 +251,15 @@ def handle_message(
             thread_id,
             kind="urgencia" if is_high else "posible_urgencia",
             summary=f"{'🚨 ' if is_high else ''}{crisis.category.upper()} [{crisis.level}]: {text[:180]}",
-            draft_for_jmf=f"Match: '{crisis.matched}'\n\nTexto del paciente:\n{text}",
+            draft_for_owner=f"Match: '{crisis.matched}'\n\nTexto del paciente:\n{text}",
         )
         ticket_id = tid.get("ticket_id")
-        get_relay().send_to_jmf({
+        get_relay().send_to_owner({
             "id": ticket_id,
             "thread_id": thread_id,
             "kind": "urgencia" if is_high else "posible_urgencia",
             "summary": f"{crisis.category} [{crisis.level}]",
-            "draft_for_jmf": f"Match keyword: '{crisis.matched}'\nNivel: {crisis.level}\n\nTexto:\n{text}",
+            "draft_for_owner": f"Match keyword: '{crisis.matched}'\nNivel: {crisis.level}\n\nTexto:\n{text}",
             "urgent": is_high,
             "contact_phone": cphone,
             "contact_name": cname,
@@ -294,15 +294,15 @@ def handle_message(
             thread_id,
             kind=intent,
             summary=text[:200],
-            draft_for_jmf=None,
+            draft_for_owner=None,
         )
         ticket_id = tid.get("ticket_id")
-        get_relay().send_to_jmf({
+        get_relay().send_to_owner({
             "id": ticket_id,
             "thread_id": thread_id,
             "kind": intent,
             "summary": text[:200],
-            "draft_for_jmf": None,
+            "draft_for_owner": None,
             "urgent": False,
             "contact_phone": cphone,
             "contact_name": cname,
@@ -334,7 +334,7 @@ def handle_message(
                 thread_id,
                 kind="info_curso",
                 summary=text[:200],
-                draft_for_jmf=None,
+                draft_for_owner=None,
             )
             ticket_id = tid.get("ticket_id")
             reply = reply or "Déjame confirmar los detalles con el doctor y te aviso en cuanto sepa."

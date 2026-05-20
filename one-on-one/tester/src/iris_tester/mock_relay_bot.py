@@ -1,5 +1,5 @@
-"""Mock del relay-bot — recibe `/send-to-jmf` y opcionalmente auto-responde
-llamando al brain `/jmf/reply` después de N segundos.
+"""Mock del relay-bot — recibe `/send-to-owner` y opcionalmente auto-responde
+llamando al brain `/owner/reply` después de N segundos.
 
 Útil para probar el ciclo completo paciente→OWNER→paciente sin Telegram real.
 
@@ -28,19 +28,19 @@ AUTO_DELAY = float(os.environ.get("MOCK_RELAY_AUTO_DELAY", "2.0"))
 
 app = FastAPI(title="iris-mock-relay-bot", version="0.1.0")
 
-JMF_INBOX: list[dict] = []
+OWNER_INBOX: list[dict] = []
 
 
-class SendToJmfRequest(BaseModel):
+class SendToOwnerRequest(BaseModel):
     ticket_id: str
     contact_phone: str
     summary: str
     text: str
 
 
-class SendToJmfResponse(BaseModel):
+class SendToOwnerResponse(BaseModel):
     ok: bool
-    delivered_to: str = "mock-jmf"
+    delivered_to: str = "mock-owner"
 
 
 async def _auto_reply_task(ticket_id: str, contact_phone: str, body: str) -> None:
@@ -52,7 +52,7 @@ async def _auto_reply_task(ticket_id: str, contact_phone: str, body: str) -> Non
     }
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(f"{BRAIN_URL}/jmf/reply", json=payload)
+            r = await client.post(f"{BRAIN_URL}/owner/reply", json=payload)
             r.raise_for_status()
             print(f"[mock-relay] auto-replied ticket={ticket_id} status={r.status_code}")
     except httpx.HTTPError as err:
@@ -69,34 +69,34 @@ def health() -> dict:
     }
 
 
-@app.post("/send-to-jmf", response_model=SendToJmfResponse)
-async def send_to_jmf(req: SendToJmfRequest) -> SendToJmfResponse:
+@app.post("/send-to-owner", response_model=SendToOwnerResponse)
+async def send_to_owner(req: SendToOwnerRequest) -> SendToOwnerResponse:
     entry = req.model_dump()
-    JMF_INBOX.append(entry)
+    OWNER_INBOX.append(entry)
     print(f"[mock-relay] ticket→OWNER {entry}")
 
     if AUTO_REPLY:
         # Disparamos la auto-respuesta sin bloquear la respuesta HTTP.
         asyncio.create_task(_auto_reply_task(req.ticket_id, req.contact_phone, AUTO_REPLY))
 
-    return SendToJmfResponse(ok=True)
+    return SendToOwnerResponse(ok=True)
 
 
 @app.post("/_debug/manual-reply")
 async def manual_reply(ticket_id: str, contact_phone: str, body: str) -> dict:
-    """Para tests: dispara manualmente un /jmf/reply al brain."""
+    """Para tests: dispara manualmente un /owner/reply al brain."""
     await _auto_reply_task(ticket_id, contact_phone, body)
     return {"ok": True}
 
 
 @app.get("/_debug/inbox")
 def debug_inbox() -> dict:
-    return {"count": len(JMF_INBOX), "items": JMF_INBOX[-50:]}
+    return {"count": len(OWNER_INBOX), "items": OWNER_INBOX[-50:]}
 
 
 @app.post("/_debug/reset")
 def debug_reset() -> dict:
-    JMF_INBOX.clear()
+    OWNER_INBOX.clear()
     return {"ok": True}
 
 

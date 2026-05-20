@@ -13,6 +13,6 @@ steps:
       ticket_created: true
       reply_contains: ["urgencias"]
 
-  - jmf_reply: "Acabo de ver tu mensaje, ¿estás en casa? Voy en camino o llama al 911 si es necesario."
+  - owner_reply: "Acabo de ver tu mensaje, ¿estás en casa? Voy en camino o llama al 911 si es necesario."
     expect:
       ticket_status: awaiting_patient

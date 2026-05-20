@@ -27,7 +27,7 @@ Cuando el `kind` del contacto en este thread es `owner` ({{OWNER_NICKNAME}} escr
 
 Ejemplo:
 - {{OWNER_NICKNAME}}: "qué hay pendiente?"
-- {{ASSISTANT_NAME}}: "Tienes 2 tickets en awaiting_jmf: uno de María (consulta) y otro de Carlos (info)."
+- {{ASSISTANT_NAME}}: "Tienes 2 tickets en awaiting_owner: uno de María (consulta) y otro de Carlos (info)."
 
 ## Modo agéntica — outbound y coordinación
 

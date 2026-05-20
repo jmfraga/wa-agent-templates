@@ -121,7 +121,7 @@ def upgrade() -> None:
         sa.Column("kind", sa.Text(), nullable=False),
         sa.Column("summary", sa.Text(), nullable=False),
         sa.Column("status", sa.Text(), nullable=False),
-        sa.Column("jmf_response", sa.Text(), nullable=True),
+        sa.Column("owner_response", sa.Text(), nullable=True),
         sa.Column(
             "created_at",
             sa.TIMESTAMP(timezone=True),
@@ -142,7 +142,7 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.CheckConstraint(
-            "status IN ('open','awaiting_jmf','awaiting_patient','closed')",
+            "status IN ('open','awaiting_owner','awaiting_patient','closed')",
             name="ck_tickets_status",
         ),
     )
@@ -174,7 +174,7 @@ def upgrade() -> None:
             "kb_slug", "key", name="uq_course_facts_slug_key"
         ),
         sa.CheckConstraint(
-            "source IN ('jmf','landing','manual')",
+            "source IN ('owner','landing','manual')",
             name="ck_course_facts_source",
         ),
     )

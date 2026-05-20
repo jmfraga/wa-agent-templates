@@ -263,7 +263,7 @@ TOOLS: list[dict] = [
                 "thread_id": {"type": "integer"},
                 "kind": {"type": "string", "description": "Categoría libre: agenda, precio, clinico, asesoria, otro."},
                 "summary": {"type": "string", "description": "1-2 frases describiendo qué necesita el contacto."},
-                "draft_for_jmf": {"type": "string", "description": "Mensaje sugerido para que OWNER apruebe/edite antes de relay."},
+                "draft_for_owner": {"type": "string", "description": "Mensaje sugerido para que OWNER apruebe/edite antes de relay."},
             },
             "required": ["thread_id", "kind", "summary"],
         },
@@ -369,14 +369,14 @@ def _update_contact(
     return {"ok": True, "contact_id": cid, "fields_updated": fields, "phone": p}
 
 
-def _open_ticket(thread_id: int, kind: str, summary: str, draft_for_jmf: str | None = None) -> dict[str, Any]:
+def _open_ticket(thread_id: int, kind: str, summary: str, draft_for_owner: str | None = None) -> dict[str, Any]:
     with get_session() as s:
         t = Ticket(
             thread_id=thread_id,
             kind=kind,
             summary=summary,
-            draft_for_jmf=draft_for_jmf,
-            status=TicketStatus.awaiting_jmf,
+            draft_for_owner=draft_for_owner,
+            status=TicketStatus.awaiting_owner,
         )
         s.add(t)
         s.flush()
@@ -404,7 +404,7 @@ def execute(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 int(args["thread_id"]),
                 args["kind"],
                 args["summary"],
-                args.get("draft_for_jmf"),
+                args.get("draft_for_owner"),
             )
         # ----- agentic tools -----
         if name == "search_contacts":

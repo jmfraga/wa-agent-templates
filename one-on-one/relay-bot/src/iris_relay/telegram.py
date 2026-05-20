@@ -107,15 +107,15 @@ class TelegramClient:
 
 
 class BrainClient:
-    """HTTP client for the Iris brain (POST /jmf/reply, POST /tickets/{id}/close, etc.)."""
+    """HTTP client for the Iris brain (POST /owner/reply, POST /tickets/{id}/close, etc.)."""
 
     def __init__(self, settings: Settings, http: Optional[requests.Session] = None):
         self.settings = settings
         self.http = http or requests.Session()
         self.timeout = settings.http_timeout
 
-    def jmf_reply(self, ticket_id: int, body: str) -> dict[str, Any]:
-        url = f"{self.settings.brain_url.rstrip('/')}/jmf/reply"
+    def owner_reply(self, ticket_id: int, body: str) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/owner/reply"
         r = self.http.post(url, json={"ticket_id": ticket_id, "body": body}, timeout=self.timeout)
         r.raise_for_status()
         return r.json() if r.content else {}
@@ -186,7 +186,7 @@ class TelegramRelay:
             message_id=int(message_id),
             thread_id=payload.get("thread_id"),
             kind=payload.get("kind"),
-            status="awaiting_jmf",
+            status="awaiting_owner",
         )
         if payload.get("draft"):
             self._draft_cache[ticket_id] = payload["draft"]
@@ -248,7 +248,7 @@ class TelegramRelay:
                 if not draft:
                     self.telegram.answer_callback_query(cb_id, "Sin plantilla en caché")
                     return
-                self.brain.jmf_reply(ticket_id, draft)
+                self.brain.owner_reply(ticket_id, draft)
                 self.state.set_status(ticket_id, "closed")
                 self.telegram.edit_message_text(chat_id, message_id, render_approved(ticket_id, draft))
                 self.telegram.answer_callback_query(cb_id, "Enviado")
@@ -295,7 +295,7 @@ class TelegramRelay:
             if reply_to_msg_id is not None:
                 row = self.state.find_by_message(int(chat_id), int(reply_to_msg_id))
                 if row is not None and body:
-                    self._send_jmf_reply(chat_id, row, body)
+                    self._send_owner_reply(chat_id, row, body)
                     return
 
         # 2. Comandos
@@ -313,7 +313,7 @@ class TelegramRelay:
         # 3. Texto plano → si hay ticket awaiting_reply (✍️ Responder fue tocado), envíalo ahí
         row = self.state.find_awaiting_reply(int(chat_id))
         if row is not None:
-            self._send_jmf_reply(chat_id, row, body)
+            self._send_owner_reply(chat_id, row, body)
             return
 
         # 4. Sin contexto → asumir instrucción agéntica de OWNER (Phase 1b).
@@ -334,10 +334,10 @@ class TelegramRelay:
         reply = data.get("reply") or "(sin respuesta del brain)"
         self.telegram.send_message(chat_id, reply)
 
-    def _send_jmf_reply(self, chat_id: int, row: Any, body: str) -> None:
+    def _send_owner_reply(self, chat_id: int, row: Any, body: str) -> None:
         """Envía la respuesta de OWNER al brain y actualiza el mensaje del bot."""
         try:
-            self.brain.jmf_reply(row.ticket_id, body)
+            self.brain.owner_reply(row.ticket_id, body)
             self.state.set_status(row.ticket_id, "closed")
             self.telegram.edit_message_text(
                 chat_id, row.message_id, render_reply_sent(row.ticket_id, body)
@@ -392,8 +392,8 @@ class TelegramRelay:
             self.telegram.send_message(chat_id, f"No pude obtener tickets: {e}")
             return
         groups = data.get("groups") or {}
-        # Mostrar TODOS los activos (no solo awaiting_jmf): open + awaiting_jmf + awaiting_patient.
-        active_statuses = [("awaiting_jmf", "⏳ Esperan tu respuesta"), ("open", "🆕 Recién creados"), ("awaiting_patient", "📤 Esperan al paciente")]
+        # Mostrar TODOS los activos (no solo awaiting_owner): open + awaiting_owner + awaiting_patient.
+        active_statuses = [("awaiting_owner", "⏳ Esperan tu respuesta"), ("open", "🆕 Recién creados"), ("awaiting_patient", "📤 Esperan al paciente")]
         active_total = sum(len(groups.get(s, [])) for s, _ in active_statuses)
         if active_total == 0:
             self.telegram.send_message(chat_id, "✅ No hay tickets activos en este momento.")
@@ -423,15 +423,15 @@ class TelegramRelay:
                     "thread_id": t.get("thread_id"),
                     "kind": t.get("kind"),
                     "summary": t.get("summary"),
-                    "draft": t.get("draft_for_jmf"),
+                    "draft": t.get("draft_for_owner"),
                     "contact_name": t.get("contact_name"),
                     "contact_phone": t.get("contact_phone"),
                     "urgent": t.get("kind") == "urgencia",
                 }
                 text = render_ticket_message(payload)
                 # Para awaiting_patient: indicar que el paciente ya recibió respuesta.
-                if status_key == "awaiting_patient" and t.get("jmf_response"):
-                    text += f"\n\n<i>Tu última respuesta:</i>\n<blockquote>{_esc(t['jmf_response'][:300])}</blockquote>"
+                if status_key == "awaiting_patient" and t.get("owner_response"):
+                    text += f"\n\n<i>Tu última respuesta:</i>\n<blockquote>{_esc(t['owner_response'][:300])}</blockquote>"
                 markup = build_inline_keyboard(payload)
                 sent = self.telegram.send_message(chat_id, text, reply_markup=markup)
                 try:
@@ -463,12 +463,12 @@ class TelegramRelay:
         msg = (
             f"<b>🎫 Tickets activos</b>\n\n"
             f"• Open: {counts.get('open', 0)}\n"
-            f"• Esperando tu respuesta: {counts.get('awaiting_jmf', 0)}\n"
+            f"• Esperando tu respuesta: {counts.get('awaiting_owner', 0)}\n"
             f"• Esperando paciente: {counts.get('awaiting_patient', 0)}\n"
             f"• Cerrados hoy: {counts.get('closed', 0)}\n\n"
-            f"<b>Detalle de awaiting_jmf:</b>\n"
+            f"<b>Detalle de awaiting_owner:</b>\n"
         )
-        pending = groups.get("awaiting_jmf", [])
+        pending = groups.get("awaiting_owner", [])
         if not pending:
             msg += "  (ninguno)"
         else:

@@ -16,6 +16,6 @@ steps:
       ticket_created: true
       reply_contains: ["doctor"]
 
-  - jmf_reply: "Sí claro, tengo lunes 19 a las 4pm o miércoles 21 a las 10am. ¿Cuál prefieres?"
+  - owner_reply: "Sí claro, tengo lunes 19 a las 4pm o miércoles 21 a las 10am. ¿Cuál prefieres?"
     expect:
       ticket_status: awaiting_patient
