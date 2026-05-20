@@ -3,6 +3,7 @@ import {
   default as makeWASocket,
   DisconnectReason,
   Browsers,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
   type WAMessage,
@@ -62,20 +63,109 @@ function setState(s: PairState) {
   }
 }
 
-function extractText(m: proto.IWebMessageInfo): { text: string; mediaHint?: string } {
+type ExtractedMessage = {
+  text: string;
+  mediaHint?: string;
+  hasImage?: boolean;
+  imageMime?: string;
+  imageSize?: number;
+  hasDocument?: boolean;
+  documentMime?: string;
+  documentFilename?: string;
+  documentSize?: number;
+};
+
+function extractText(m: proto.IWebMessageInfo): ExtractedMessage {
   const msg = m.message;
   if (!msg) return { text: '' };
   if (msg.conversation) return { text: msg.conversation };
   if (msg.extendedTextMessage?.text) return { text: msg.extendedTextMessage.text };
-  if (msg.imageMessage?.caption) return { text: msg.imageMessage.caption, mediaHint: 'image' };
+  if (msg.imageMessage) {
+    return {
+      text: msg.imageMessage.caption || '',
+      mediaHint: 'image',
+      hasImage: true,
+      imageMime: msg.imageMessage.mimetype || 'image/jpeg',
+      imageSize: Number(msg.imageMessage.fileLength || 0),
+    };
+  }
   if (msg.videoMessage?.caption) return { text: msg.videoMessage.caption, mediaHint: 'video' };
   if (msg.audioMessage) return { text: '', mediaHint: 'audio' };
-  if (msg.documentMessage) return {
-    text: msg.documentMessage.caption || '',
-    mediaHint: 'document',
-  };
+  if (msg.documentMessage) {
+    return {
+      text: msg.documentMessage.caption || '',
+      mediaHint: 'document',
+      hasDocument: true,
+      documentMime: msg.documentMessage.mimetype || 'application/octet-stream',
+      documentFilename: msg.documentMessage.fileName || undefined,
+      documentSize: Number(msg.documentMessage.fileLength || 0),
+    };
+  }
   if (msg.stickerMessage) return { text: '', mediaHint: 'sticker' };
   return { text: '' };
+}
+
+// Mime types que Anthropic acepta como image/document blocks.
+const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const ALLOWED_DOC_MIMES = new Set(['application/pdf']);
+const MAX_MEDIA_BYTES = 4 * 1024 * 1024; // 4MB — Anthropic recomienda <5MB binarios
+
+type MediaPayload = {
+  kind: 'image' | 'document';
+  mime: string;
+  b64: string;
+  filename?: string;
+};
+
+async function downloadIfEligible(m: proto.IWebMessageInfo, ext: ExtractedMessage): Promise<MediaPayload | null> {
+  try {
+    if (ext.hasImage) {
+      if (!ext.imageMime || !ALLOWED_IMAGE_MIMES.has(ext.imageMime)) {
+        log.info({ mime: ext.imageMime }, 'image mime no soportado, skip download');
+        return null;
+      }
+      if (ext.imageSize && ext.imageSize > MAX_MEDIA_BYTES) {
+        log.info({ size: ext.imageSize }, 'image too large, skip download');
+        return null;
+      }
+    } else if (ext.hasDocument) {
+      if (!ext.documentMime || !ALLOWED_DOC_MIMES.has(ext.documentMime)) {
+        log.info({ mime: ext.documentMime }, 'document mime no soportado, skip download');
+        return null;
+      }
+      if (ext.documentSize && ext.documentSize > MAX_MEDIA_BYTES) {
+        log.info({ size: ext.documentSize }, 'document too large, skip download');
+        return null;
+      }
+    } else {
+      return null;
+    }
+
+    const buffer = (await downloadMediaMessage(
+      m as WAMessage,
+      'buffer',
+      {},
+      { reuploadRequest: sock!.updateMediaMessage, logger: pino({ level: 'warn' }) as any },
+    )) as Buffer;
+
+    if (buffer.length > MAX_MEDIA_BYTES) {
+      log.info({ size: buffer.length }, 'downloaded media exceeds limit, drop');
+      return null;
+    }
+
+    if (ext.hasImage) {
+      return { kind: 'image', mime: ext.imageMime!, b64: buffer.toString('base64') };
+    }
+    return {
+      kind: 'document',
+      mime: ext.documentMime!,
+      b64: buffer.toString('base64'),
+      filename: ext.documentFilename,
+    };
+  } catch (e) {
+    log.error({ err: String(e) }, 'downloadMediaMessage failed');
+    return null;
+  }
 }
 
 function detectMention(m: proto.IWebMessageInfo, selfJid: string | null, selfLid: string | null): boolean {
@@ -149,7 +239,8 @@ async function handleIncoming(m: WAMessage) {
     return;
   }
 
-  const { text, mediaHint } = extractText(m);
+  const ext = extractText(m);
+  const { text, mediaHint } = ext;
   if (!text && !mediaHint) return;
 
   const mentionsPhoenix = inGroup ? detectMention(m, myJid, myLid) : true;
@@ -157,12 +248,25 @@ async function handleIncoming(m: WAMessage) {
   const contactName = m.pushName || undefined;
   const quotedMsgId = m.message?.extendedTextMessage?.contextInfo?.stanzaId || undefined;
 
+  // Bajamos binarios solo cuando Phoenix va a procesar el mensaje activamente:
+  // mention explícita, reply a Phoenix, o el owner habló. Evita gasto en
+  // imágenes/PDFs random del grupo.
+  const shouldDownloadMedia = (ext.hasImage || ext.hasDocument) &&
+    (mentionsPhoenix || quotedIsPhoenix || isOwner);
+  let media: MediaPayload[] | undefined;
+  if (shouldDownloadMedia) {
+    const m1 = await downloadIfEligible(m, ext);
+    if (m1) media = [m1];
+  }
+
   log.info(
     {
       group: inGroup ? remoteJid : null,
       sender: senderJid,
       mention: mentionsPhoenix,
       isOwner,
+      mediaHint,
+      mediaProcessed: media ? media[0].kind : null,
       text: text.slice(0, 80),
     },
     'incoming',
@@ -177,6 +281,7 @@ async function handleIncoming(m: WAMessage) {
     mentions_phoenix: mentionsPhoenix,
     quoted_msg_id: quotedMsgId,
     quoted_is_phoenix: quotedIsPhoenix,
+    media,
   });
 
   if (!resp) return;

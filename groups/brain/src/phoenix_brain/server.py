@@ -44,6 +44,7 @@ class ChatIn(BaseModel):
     mentions_phoenix: bool = False
     quoted_msg_id: Optional[str] = None
     quoted_is_phoenix: bool = False
+    media: Optional[list[dict]] = None
 
 
 class ModeIn(BaseModel):
