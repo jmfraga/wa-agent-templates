@@ -10,7 +10,7 @@
 } %}
 {% set status_labels = {
   'open': 'Open',
-  'awaiting_owner': 'Awaiting OWNER',
+  'awaiting_owner': 'Awaiting Owner',
   'awaiting_patient': 'Awaiting Patient',
   'closed': 'Closed',
 } %}
@@ -27,7 +27,7 @@
                hx-get="/admin/tickets/{{ t.get('id') }}"
                hx-target="#ticket-drawer"
                hx-swap="innerHTML"
-               _="on htmx:afterSwap from elsewhere if event.detail.target.id is 'ticket-drawer' then remove .translate-x-full from #ticket-drawer end">
+               onclick="document.getElementById('ticket-drawer').classList.remove('translate-x-full')">
             <div class="flex items-center gap-2 mb-1">
               <i data-lucide="{{ kind_icons.get(t.get('kind'), 'tag') }}" class="w-4 h-4 text-slate-600"></i>
               <span class="text-xs text-slate-500">{{ t.get('kind') }}</span>
