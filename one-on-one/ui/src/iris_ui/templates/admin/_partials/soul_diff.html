@@ -1,0 +1,23 @@
+{# Diff inline simple: current vs backup. Sin librerias, dos columnas linea-por-linea. #}
+{% set cur_lines = (current_text or '').split('\n') %}
+{% set bak_lines = (backup_text or '').split('\n') %}
+{% set max_lines = cur_lines|length if cur_lines|length > bak_lines|length else bak_lines|length %}
+
+<div class="rounded-lg border bg-white shadow-sm p-4">
+  <div class="flex items-center justify-between mb-3">
+    <h3 class="font-semibold">Diff vs backup <code class="text-sm">{{ ts }}</code></h3>
+    <button onclick="document.getElementById('diff-modal').innerHTML=''"
+            class="text-xs text-slate-500 underline">cerrar</button>
+  </div>
+  <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+    <div>
+      <div class="font-sans font-semibold text-slate-700 mb-1">Backup</div>
+      <pre class="bg-slate-50 p-2 rounded overflow-x-auto max-h-96">{{ backup_text }}</pre>
+    </div>
+    <div>
+      <div class="font-sans font-semibold text-slate-700 mb-1">Actual</div>
+      <pre class="bg-slate-50 p-2 rounded overflow-x-auto max-h-96">{{ current_text }}</pre>
+    </div>
+  </div>
+  {# TODO(OWNER): renderizar diff real (unified) cuando el brain lo exponga. #}
+</div>

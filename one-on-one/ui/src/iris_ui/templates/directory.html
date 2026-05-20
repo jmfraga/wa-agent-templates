@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Directorio - Iris{% endblock %}
+{% block content %}
+<section class="space-y-4">
+  <header class="flex items-end justify-between">
+    <div>
+      <h1 class="text-xl font-semibold text-slate-900">Directorio</h1>
+      <p class="text-sm text-slate-500">Contactos conocidos del brain.</p>
+    </div>
+  </header>
+
+  <form
+    class="flex flex-wrap gap-2 items-end bg-white border border-slate-200 rounded-lg shadow-sm p-4"
+    hx-get="/"
+    hx-target="#contacts-table"
+    hx-trigger="submit, keyup changed delay:300ms from:input[name='q']"
+    hx-push-url="true"
+  >
+    <div class="flex flex-col">
+      <label class="text-xs text-slate-500 mb-1">Buscar</label>
+      <input
+        type="text"
+        name="q"
+        value="{{ q }}"
+        placeholder="nombre o telefono"
+        class="border border-slate-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
+      />
+    </div>
+    <div class="flex flex-col">
+      <label class="text-xs text-slate-500 mb-1">Kind</label>
+      <select name="kind" class="border border-slate-300 rounded-md px-3 py-1.5 text-sm bg-white">
+        <option value="" {% if not kind %}selected{% endif %}>Todos</option>
+        <option value="owner" {% if kind == 'owner' %}selected{% endif %}>👑 owner</option>
+        <option value="paciente" {% if kind == 'paciente' %}selected{% endif %}>🩺 paciente</option>
+        <option value="prospecto_curso" {% if kind == 'prospecto_curso' %}selected{% endif %}>🎓 prospecto curso</option>
+        <option value="colega" {% if kind == 'colega' %}selected{% endif %}>🧑‍⚕️ colega</option>
+        <option value="asesoria" {% if kind == 'asesoria' %}selected{% endif %}>💼 asesoría</option>
+        <option value="amigo" {% if kind == 'amigo' %}selected{% endif %}>🤝 amigo</option>
+        <option value="familia" {% if kind == 'familia' %}selected{% endif %}>👨‍👩‍👦 familia</option>
+        <option value="otro" {% if kind == 'otro' %}selected{% endif %}>📩 otro</option>
+      </select>
+    </div>
+    <div class="flex flex-col">
+      <label class="text-xs text-slate-500 mb-1">Orden</label>
+      <select name="sort" class="border border-slate-300 rounded-md px-3 py-1.5 text-sm bg-white">
+        <option value="name" {% if sort == 'name' or not sort %}selected{% endif %}>🔤 Alfabético</option>
+        <option value="recent" {% if sort == 'recent' %}selected{% endif %}>🕒 Reciente</option>
+        <option value="threads" {% if sort == 'threads' %}selected{% endif %}>💬 Últimos threads</option>
+      </select>
+    </div>
+    <button type="submit" class="bg-slate-900 text-white text-sm rounded-md px-4 py-1.5 hover:bg-slate-700">
+      Filtrar
+    </button>
+  </form>
+
+  <div id="contacts-table">
+    {% include "_partials/contacts_table.html" %}
+  </div>
+</section>
+{% endblock %}

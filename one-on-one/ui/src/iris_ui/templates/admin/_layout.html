@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Admin · Iris{% endblock %}
+
+{% block content %}
+<div class="flex gap-6 -mt-6 -mx-4">
+  {# Sidebar #}
+  <aside class="w-56 shrink-0 border-r border-slate-200 bg-white min-h-[calc(100vh-3.5rem)] py-6 px-3">
+    <div class="px-2 mb-4 text-xs uppercase tracking-wide text-slate-500">Admin</div>
+    <nav class="space-y-1 text-sm">
+      {% set links = [
+        ('dashboard', '/admin', 'layout-dashboard', 'Dashboard'),
+        ('settings',  '/admin/settings', 'settings', 'Settings'),
+        ('soul',      '/admin/soul', 'file-text', 'SOUL'),
+        ('tickets',   '/admin/tickets', 'inbox', 'Tickets'),
+        ('tasks',     '/admin/tasks', 'list-checks', 'Tareas'),
+        ('whatsapp',  '/admin/whatsapp', 'message-circle', 'WhatsApp'),
+        ('metrics',   '/admin/metrics', 'bar-chart-3', 'Metricas'),
+        ('health',    '/admin/health', 'activity', 'Health'),
+      ] %}
+      {% for key, href, icon, label in links %}
+      <a href="{{ href }}"
+         class="flex items-center gap-2 px-3 py-2 rounded-md {% if active == key %}bg-slate-900 text-white{% else %}text-slate-700 hover:bg-slate-100{% endif %}">
+        <i data-lucide="{{ icon }}" class="w-4 h-4"></i>
+        <span>{{ label }}</span>
+      </a>
+      {% endfor %}
+    </nav>
+    <div class="px-2 mt-6 text-xs text-slate-400">
+      Iris v2 admin
+    </div>
+  </aside>
+
+  {# Main column #}
+  <section class="flex-1 py-6 pr-4">
+    {# Breadcrumb / title bar #}
+    <div class="flex items-center justify-between mb-4">
+      <div class="text-sm text-slate-500">
+        <a href="/admin" class="hover:text-slate-700">Admin</a>
+        {% block crumb %}{% endblock %}
+      </div>
+      <div id="toast-area" class="space-y-2"></div>
+    </div>
+
+    {% if toast %}
+      {% include "admin/_partials/toast.html" %}
+    {% endif %}
+
+    {% block admin_content %}{% endblock %}
+  </section>
+</div>
+
+<script src="https://unpkg.com/lucide@latest"></script>
+<script>
+  if (window.lucide) { lucide.createIcons(); }
+  document.body.addEventListener('htmx:afterSwap', () => {
+    if (window.lucide) { lucide.createIcons(); }
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,115 @@
+{% extends "admin/_layout.html" %}
+{% block admin_title %}Tareas agénticas{% endblock %}
+{% block admin_content %}
+<section class="space-y-4">
+  <header class="flex items-end justify-between">
+    <div>
+      <h1 class="text-xl font-semibold text-slate-900">Tareas agénticas</h1>
+      <p class="text-sm text-slate-500">Tasks que Iris está coordinando por ti. Outbound + tracking de respuestas.</p>
+    </div>
+    <div class="flex gap-2 text-sm">
+      <a href="/admin/tasks" class="px-3 py-1.5 rounded-md border {% if not status %}bg-slate-900 text-white{% else %}bg-white text-slate-700{% endif %}">Todas</a>
+      <a href="/admin/tasks?status=awaiting_responses" class="px-3 py-1.5 rounded-md border {% if status == 'awaiting_responses' %}bg-slate-900 text-white{% else %}bg-white text-slate-700{% endif %}">Esperando respuestas</a>
+      <a href="/admin/tasks?status=complete" class="px-3 py-1.5 rounded-md border {% if status == 'complete' %}bg-slate-900 text-white{% else %}bg-white text-slate-700{% endif %}">Completas</a>
+      <a href="/admin/tasks?status=cancelled" class="px-3 py-1.5 rounded-md border {% if status == 'cancelled' %}bg-slate-900 text-white{% else %}bg-white text-slate-700{% endif %}">Canceladas</a>
+    </div>
+  </header>
+
+  {% if not tasks %}
+  <div class="bg-white border border-slate-200 rounded-lg shadow-sm p-8 text-center text-slate-400 text-sm">
+    Sin tareas {{ status or '' }} todavía.
+  </div>
+  {% endif %}
+
+  {% for t in tasks %}
+  <details {% if loop.first %}open{% endif %} class="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+    <summary class="cursor-pointer px-4 py-3 bg-slate-50 hover:bg-slate-100 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        {% set status_color = {'pending':'amber','in_progress':'blue','awaiting_responses':'sky','complete':'emerald','cancelled':'slate'} %}
+        {% set c = status_color.get(t.status, 'slate') %}
+        <span class="inline-block w-2 h-2 rounded-full bg-{{ c }}-500"></span>
+        <span class="font-mono text-xs text-slate-500">#{{ t.id }}</span>
+        <span class="font-medium text-slate-900">{{ t.summary[:80] }}</span>
+        <span class="text-xs px-2 py-0.5 rounded-full bg-{{ c }}-50 text-{{ c }}-700">{{ t.status }}</span>
+      </div>
+      <div class="flex items-center gap-3 text-xs text-slate-500">
+        <span>{{ t.kind }}</span>
+        <span>{{ t.targets|length }} target{{ 's' if t.targets|length != 1 else '' }}</span>
+        <span>{{ (t.updated_at or '')[:16].replace('T', ' ') }}</span>
+      </div>
+    </summary>
+
+    <div class="p-4 border-t border-slate-200 space-y-3">
+      {% if t.raw_instruction %}
+      <div>
+        <div class="text-xs text-slate-500 mb-1">Instrucción original de OWNER</div>
+        <div class="text-sm bg-slate-50 p-2 rounded-md italic">"{{ t.raw_instruction }}"</div>
+      </div>
+      {% endif %}
+
+      {% if t.context %}
+      <div>
+        <div class="text-xs text-slate-500 mb-1">Contexto</div>
+        <div class="text-xs font-mono bg-slate-50 p-2 rounded-md">{{ t.context }}</div>
+      </div>
+      {% endif %}
+
+      <div>
+        <div class="text-xs text-slate-500 mb-1">Destinatarios ({{ t.targets|length }})</div>
+        <table class="min-w-full text-sm">
+          <thead class="text-xs text-slate-500">
+            <tr>
+              <th class="text-left py-1 pr-3">Contacto</th>
+              <th class="text-left py-1 pr-3">Status</th>
+              <th class="text-left py-1 pr-3">Mensaje enviado</th>
+              <th class="text-left py-1 pr-3">Respuesta</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for tg in t.targets %}
+            <tr>
+              <td class="py-2 pr-3">
+                <div class="font-medium">{{ tg.contact_name or '(?)' }}</div>
+                <div class="text-xs text-slate-400 font-mono">+{{ tg.contact_phone }}</div>
+              </td>
+              <td class="py-2 pr-3">
+                {% set tc = {'pending':'amber','sent':'sky','responded':'emerald','failed':'rose','cancelled':'slate'}.get(tg.status, 'slate') %}
+                <span class="text-xs px-2 py-0.5 rounded-full bg-{{ tc }}-50 text-{{ tc }}-700">{{ tg.status }}</span>
+                {% if tg.response_classification %}
+                  <span class="text-xs text-slate-500 ml-1">{{ tg.response_classification }}</span>
+                {% endif %}
+              </td>
+              <td class="py-2 pr-3 text-xs text-slate-600 max-w-xs truncate" title="{{ tg.message_sent or '' }}">
+                {{ tg.message_sent or '—' }}
+                {% if tg.message_sent_at %}
+                  <div class="text-[10px] text-slate-400">{{ tg.message_sent_at[:16].replace('T', ' ') }}</div>
+                {% endif %}
+              </td>
+              <td class="py-2 pr-3 text-xs text-slate-600 max-w-xs truncate" title="{{ tg.response or '' }}">
+                {{ tg.response or '—' }}
+                {% if tg.responded_at %}
+                  <div class="text-[10px] text-slate-400">{{ tg.responded_at[:16].replace('T', ' ') }}</div>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if t.status in ('pending', 'in_progress', 'awaiting_responses') %}
+      <div class="flex justify-end">
+        <button hx-post="/admin/tasks/{{ t.id }}/cancel"
+                hx-target="closest details"
+                hx-swap="outerHTML"
+                hx-confirm="¿Cancelar esta task? Se marcará como cancelada y los targets pendientes/sent quedarán congelados."
+                class="text-xs bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 px-3 py-1 rounded-md">
+          🛑 Cancelar task
+        </button>
+      </div>
+      {% endif %}
+    </div>
+  </details>
+  {% endfor %}
+</section>
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "admin/_layout.html" %}
+{% block crumb %} · SOUL{% endblock %}
+
+{% block admin_content %}
+<div class="flex gap-4">
+  <div class="flex-1">
+    <div class="flex items-baseline justify-between mb-2">
+      <div class="text-sm text-slate-600">
+        <code>{{ soul.get('path') or 'brain/SOUL.md' }}</code> ·
+        {{ soul.get('size_bytes', 0) }} bytes ·
+        mtime <span class="text-slate-500">{{ soul.get('mtime') or '-' }}</span>
+      </div>
+      <div id="dirty-flag" class="text-xs text-amber-700 hidden">cambios sin guardar</div>
+    </div>
+
+    <form hx-post="/admin/soul" hx-target="body" hx-swap="outerHTML" id="soul-form">
+      <textarea name="text" id="soul-editor"
+                class="w-full font-mono text-sm rounded-md border-slate-300 p-3"
+                style="height: 80vh;"
+                oninput="document.getElementById('dirty-flag').classList.remove('hidden')"
+                >{{ soul.get('text', '') }}</textarea>
+      <div class="flex gap-2 mt-3">
+        <button type="submit"
+                class="bg-slate-900 text-white px-4 py-2 rounded-md hover:bg-slate-800 text-sm">
+          Guardar
+        </button>
+        <button type="button"
+                hx-post="/admin/soul/reload" hx-target="body" hx-swap="outerHTML"
+                hx-confirm="Recargar desde disco descarta el buffer actual. Continuar?"
+                class="bg-white border border-slate-300 px-4 py-2 rounded-md hover:bg-slate-50 text-sm">
+          Recargar sin guardar
+        </button>
+        <button type="reset"
+                onclick="document.getElementById('dirty-flag').classList.add('hidden')"
+                class="bg-white border border-slate-300 px-4 py-2 rounded-md hover:bg-slate-50 text-sm">
+          Descartar cambios
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <aside class="w-72 shrink-0">
+    <h3 class="text-sm font-semibold mb-2">Backups</h3>
+    <ul class="space-y-2 text-sm">
+      {% for b in (soul.get('backups') or []) %}
+        <li class="border rounded-md p-2 bg-white">
+          <div class="font-mono text-xs">{{ b.get('filename') or b.get('ts') }}</div>
+          <div class="text-xs text-slate-500">{{ b.get('ts') }}</div>
+          <div class="flex gap-2 mt-1">
+            <button hx-get="/admin/soul/backup/{{ b.get('ts') }}"
+                    hx-target="#diff-modal"
+                    class="text-xs text-slate-700 underline">Ver diff</button>
+            <button hx-post="/admin/soul/backup/{{ b.get('ts') }}/restore"
+                    hx-confirm="Restaurar este backup sobreescribe el SOUL actual. Confirmas?"
+                    hx-target="body" hx-swap="outerHTML"
+                    class="text-xs text-rose-700 underline">Restore</button>
+            {# TODO(OWNER): brain endpoint POST /admin/soul/backup/{ts}/restore aun por definir. #}
+          </div>
+        </li>
+      {% else %}
+        <li class="text-slate-500 text-xs">No hay backups.</li>
+      {% endfor %}
+    </ul>
+  </aside>
+</div>
+
+<div id="diff-modal" class="mt-6"></div>
+{% endblock %}

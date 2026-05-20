@@ -1,0 +1,8 @@
+{# Toast: success o error. Se inserta via hx-swap-oob al #toast-area. #}
+<div hx-swap-oob="afterbegin:#toast-area">
+  <div class="px-3 py-2 rounded-md text-sm shadow
+              {% if toast.ok %}bg-emerald-600 text-white{% else %}bg-rose-600 text-white{% endif %}"
+       _="on load wait 4s then remove me">
+    {{ toast.message }}
+  </div>
+</div>

@@ -1,0 +1,11 @@
+{% if result.get('ok') %}
+  <div class="rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm p-3">
+    Nuevo token generado. Cópialo a <code>ui/.env</code> como <code>IRIS_ADMIN_TOKEN=</code>
+    y reinicia la UI:
+    <pre class="mt-2 bg-slate-900 text-slate-100 p-2 rounded text-xs overflow-x-auto">{{ result.get('new_token') }}</pre>
+  </div>
+{% else %}
+  <div class="rounded-md bg-rose-50 border border-rose-200 text-rose-800 text-sm p-3">
+    Error: {{ result.get('error') or 'no se pudo regenerar' }}
+  </div>
+{% endif %}

@@ -1,0 +1,18 @@
+[Unit]
+Description=Iris v2 wa-listener (Baileys + HTTP :8099)
+After=network-online.target iris-brain.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iris
+WorkingDirectory=/opt/iris/wa-listener
+EnvironmentFile=/opt/iris/wa-listener/.env
+ExecStart=/usr/bin/npx tsx src/index.ts
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/iris-wa-listener.log
+StandardError=append:/var/log/iris-wa-listener.log
+
+[Install]
+WantedBy=multi-user.target

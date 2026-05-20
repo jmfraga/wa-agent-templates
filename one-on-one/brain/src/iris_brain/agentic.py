@@ -1,0 +1,429 @@
+"""Iris agéntica — lógica de outbound, task tracking, owner reporting.
+
+Funciones de soporte para los tools agentic_*. La capa de tools en tools.py
+las llama y devuelve resultados a Anthropic SDK.
+
+Decisiones congeladas:
+- Confirmación explícita: Iris construye plan, OWNER aprueba, ENTONCES se envía.
+- Canal de instrucción: Telegram (POST a relay-bot endpoint).
+- Reportes en vivo: ping a Telegram cada vez que un target responde.
+- Send is final: WhatsApp no permite unsend reliable post-segundos.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+import httpx
+from sqlalchemy import or_, select
+
+from .config import settings
+from .db import get_session
+from .models import Contact, Task, TaskTarget, Thread, Message, MessageDirection
+
+log = logging.getLogger("iris_brain.agentic")
+
+
+# --- Search -----------------------------------------------------------------
+
+def search_contacts(query: str, kind: str | None = None, limit: int = 10) -> dict[str, Any]:
+    """Búsqueda fuzzy por name/phone/notes. Útil para resolver 'manda a Roberto'."""
+    if not query or not query.strip():
+        return {"found": False, "items": [], "count": 0}
+    pattern = f"%{query.strip()}%"
+    with get_session() as s:
+        stmt = select(Contact).where(
+            or_(
+                Contact.name.ilike(pattern),
+                Contact.phone.ilike(pattern),
+                Contact.notes.ilike(pattern),
+            )
+        )
+        if kind:
+            stmt = stmt.where(Contact.kind == kind)
+        stmt = stmt.order_by(Contact.last_seen.desc().nullslast()).limit(max(1, min(limit, 20)))
+        rows = list(s.scalars(stmt))
+        items = [
+            {
+                "id": c.id,
+                "name": c.name,
+                "phone": c.phone,
+                "kind": c.kind.value if c.kind else "otro",
+                "notes": (c.notes or "")[:200],
+            }
+            for c in rows
+        ]
+        return {"found": bool(items), "count": len(items), "items": items}
+
+
+# --- Task lifecycle ---------------------------------------------------------
+
+def create_task(
+    owner_id: int,
+    kind: str,
+    summary: str,
+    raw_instruction: str | None,
+    target_contact_ids: list[int],
+    context: dict | None = None,
+    expected_names: list[str] | None = None,
+) -> dict[str, Any]:
+    """Crea task + N task_targets en status='pending'.
+
+    No envía mensajes — eso lo hace send_outbound después de la confirmación de OWNER.
+
+    Guardrails:
+    - owner_id NUNCA puede estar en target_contact_ids (Iris no debe escribirle al owner).
+    - target_contact_ids no puede estar vacío.
+    - Si expected_names está presente, cada nombre debe matchear el name del contact correspondiente
+      (fuzzy: substring case-insensitive, alguna palabra en común). Si no, rechaza.
+    """
+    if not target_contact_ids:
+        return {"ok": False, "error": "sin targets"}
+    # Dedupe + guardrail: owner nunca es target
+    target_contact_ids = [int(t) for t in target_contact_ids if int(t) != int(owner_id)]
+    if not target_contact_ids:
+        return {"ok": False, "error": "todos los target_contact_ids eran el owner — Iris no puede escribirse a sí misma ni al doctor"}
+    target_contact_ids = list(dict.fromkeys(target_contact_ids))  # dedupe preserve order
+
+    # Validación nombre↔contact_id si expected_names presente.
+    # Si hay mismatch, AUTO-CORRIGE buscando el contact por nombre.
+    auto_corrections: list[dict] = []
+    if expected_names:
+        if len(expected_names) != len(target_contact_ids):
+            return {
+                "ok": False,
+                "error": f"len(expected_names)={len(expected_names)} != len(target_contact_ids)={len(target_contact_ids)}. Pasa la misma cantidad en ambos arrays, en mismo orden.",
+            }
+        corrected_ids: list[int] = []
+        with get_session() as s:
+            for expected, cid in zip(expected_names, target_contact_ids):
+                c = s.get(Contact, cid)
+                actual = (c.name or "").lower().strip() if c is not None else ""
+                exp = expected.lower().strip()
+                actual_words = {w for w in actual.split() if len(w) >= 3}
+                exp_words = {w for w in exp.split() if len(w) >= 3}
+
+                if c is not None and (actual_words & exp_words):
+                    # Match OK, conserva el cid
+                    corrected_ids.append(cid)
+                    continue
+
+                # MISMATCH — auto-resolver por nombre
+                log.warning(
+                    "create_task AUTO-CORRECT: cid=%s name='%s' no matchea expected='%s' — buscando…",
+                    cid, c.name if c else "(missing)", expected,
+                )
+                # Buscar candidatos por nombre (whole expected as query)
+                pattern = f"%{expected.strip()}%"
+                candidates = list(
+                    s.scalars(
+                        select(Contact).where(Contact.name.ilike(pattern)).limit(5)
+                    )
+                )
+                if not candidates:
+                    # Fallback: buscar por cada palabra del nombre, intersección
+                    found = None
+                    for word in exp_words:
+                        rows = list(
+                            s.scalars(select(Contact).where(Contact.name.ilike(f"%{word}%")).limit(20))
+                        )
+                        if not found:
+                            found = set(r.id for r in rows)
+                        else:
+                            found &= set(r.id for r in rows)
+                        if found is not None and len(found) == 1:
+                            cand_id = next(iter(found))
+                            candidates = [s.get(Contact, cand_id)]
+                            break
+                if not candidates:
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"No encontré ningún contacto que matchee con '{expected}'. "
+                            f"Pídele a OWNER el teléfono específico o varía el nombre."
+                        ),
+                    }
+                if len(candidates) > 1:
+                    options = ", ".join(f"id={x.id}/'{x.name}'" for x in candidates[:5])
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"Encontré {len(candidates)} candidatos para '{expected}': {options}. "
+                            f"Pídele a OWNER que elija o re-busca con criterio más específico (apellido completo, etc)."
+                        ),
+                    }
+                # Único match — usar y registrar la corrección
+                correct = candidates[0]
+                if correct.id != cid:
+                    auto_corrections.append({
+                        "expected": expected,
+                        "iris_passed_cid": cid,
+                        "iris_passed_name": c.name if c else None,
+                        "auto_corrected_to_cid": correct.id,
+                        "auto_corrected_to_name": correct.name,
+                    })
+                corrected_ids.append(correct.id)
+        target_contact_ids = corrected_ids
+    with get_session() as s:
+        t = Task(
+            owner_id=owner_id,
+            kind=kind,
+            summary=summary[:500],
+            raw_instruction=raw_instruction,
+            status="pending",
+            context=context,
+        )
+        s.add(t)
+        s.flush()
+        targets_info = []
+        for cid in target_contact_ids:
+            tt = TaskTarget(task_id=t.id, contact_id=cid, status="pending")
+            s.add(tt)
+            s.flush()  # para obtener tt.id
+            # Lookup nombre del contact para devolverlo
+            c = s.get(Contact, cid)
+            targets_info.append({
+                "target_id": tt.id,
+                "contact_id": cid,
+                "contact_name": c.name if c else None,
+                "contact_phone": c.phone if c else None,
+            })
+        result: dict[str, Any] = {
+            "ok": True,
+            "task_id": t.id,
+            "target_count": len(target_contact_ids),
+            "targets": targets_info,  # USA estos target_id en send_outbound (no contact_id)
+        }
+        if auto_corrections:
+            result["auto_corrections"] = auto_corrections
+            result["warning"] = (
+                "Hubo correcciones automáticas — algunos contact_id que pasaste no coincidían con expected_names. "
+                "El server resolvió por nombre. REVISA targets[] antes de continuar y avísale a OWNER en tu reporte de plan."
+            )
+        return result
+
+
+def list_active_tasks(owner_id: int | None = None, limit: int = 20) -> dict[str, Any]:
+    with get_session() as s:
+        stmt = select(Task).where(Task.status.notin_(["complete", "cancelled"]))
+        if owner_id is not None:
+            stmt = stmt.where(Task.owner_id == owner_id)
+        stmt = stmt.order_by(Task.updated_at.desc()).limit(limit)
+        rows = list(s.scalars(stmt))
+        items = []
+        for t in rows:
+            target_count = s.scalar(
+                select(__import__("sqlalchemy").func.count())
+                .select_from(TaskTarget)
+                .where(TaskTarget.task_id == t.id)
+            ) or 0
+            responded = s.scalar(
+                select(__import__("sqlalchemy").func.count())
+                .select_from(TaskTarget)
+                .where(TaskTarget.task_id == t.id, TaskTarget.status == "responded")
+            ) or 0
+            items.append({
+                "id": t.id,
+                "kind": t.kind,
+                "summary": t.summary,
+                "status": t.status,
+                "targets": target_count,
+                "responded": responded,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+            })
+        return {"items": items, "count": len(items)}
+
+
+def update_task_status(task_id: int, status: str, note: str | None = None) -> dict[str, Any]:
+    valid = {"pending", "in_progress", "awaiting_responses", "complete", "cancelled"}
+    if status not in valid:
+        return {"ok": False, "error": f"status inválido: {status}"}
+    with get_session() as s:
+        t = s.get(Task, task_id)
+        if t is None:
+            return {"ok": False, "error": "task no existe"}
+        t.status = status
+        if status in ("complete", "cancelled"):
+            t.completed_at = datetime.now(timezone.utc)
+        return {"ok": True, "task_id": task_id, "status": status}
+
+
+# --- Outbound send ----------------------------------------------------------
+
+def send_outbound(task_id: int, target_id: int, body: str) -> dict[str, Any]:
+    """Envía mensaje al target via wa-listener, persiste en messages, actualiza task_target.
+
+    Retorna {ok, message_id?, error?}.
+    """
+    if not body or not body.strip():
+        return {"ok": False, "error": "body vacío"}
+    body = body.strip()
+
+    with get_session() as s:
+        tt = s.get(TaskTarget, target_id)
+        if tt is None or tt.task_id != task_id:
+            return {"ok": False, "error": "task_target no existe o no pertenece a la task"}
+        c = s.get(Contact, tt.contact_id)
+        if c is None:
+            return {"ok": False, "error": "contacto no existe"}
+        # Guardrail: nunca enviar al owner (Iris no se escribe al doctor por WA)
+        task = s.get(Task, task_id)
+        if task is not None and int(tt.contact_id) == int(task.owner_id):
+            log.error("send_outbound BLOCKED: target_id=%s es el owner del task %s", target_id, task_id)
+            tt.status = "failed"
+            return {"ok": False, "error": "target es el owner — no se permite escribirle por WhatsApp"}
+        # Resolver/crear thread para este contacto (igual que sessions.open_or_get_thread)
+        thread = s.scalar(
+            select(Thread)
+            .where(Thread.contact_id == c.id)
+            .order_by(Thread.opened_at.desc())
+            .limit(1)
+        )
+        if thread is None:
+            thread = Thread(contact_id=c.id, channel="whatsapp")
+            s.add(thread)
+            s.flush()
+        thread_id = thread.id
+        phone = c.phone
+
+    # POST a wa-listener
+    wa_url = (settings.CONTACT_RELAY_WEBHOOK or "http://localhost:8099/send-to-contact")
+    try:
+        with httpx.Client(timeout=10) as client:
+            r = client.post(wa_url, json={
+                "type": "outbound",
+                "phone": phone,
+                "body": body,
+                "thread_id": thread_id,
+            })
+            r.raise_for_status()
+            wa_resp = r.json()
+    except httpx.HTTPError as e:
+        log.exception("send_outbound: wa-listener falló")
+        with get_session() as s:
+            tt2 = s.get(TaskTarget, target_id)
+            if tt2 is not None:
+                tt2.status = "failed"
+        return {"ok": False, "error": str(e)}
+
+    if not wa_resp.get("ok"):
+        log.warning("send_outbound: wa-listener returned %s", wa_resp)
+        with get_session() as s:
+            tt2 = s.get(TaskTarget, target_id)
+            if tt2 is not None:
+                tt2.status = "failed"
+        return {"ok": False, "error": wa_resp.get("error", "wa_listener_fail")}
+
+    # Persistir en messages y actualizar task_target
+    now = datetime.now(timezone.utc)
+    with get_session() as s:
+        m = Message(
+            thread_id=thread_id,
+            direction=MessageDirection.out,
+            body=body,
+            model_used="agentic_outbound",
+        )
+        s.add(m)
+        tt2 = s.get(TaskTarget, target_id)
+        if tt2 is not None:
+            tt2.message_sent = body
+            tt2.message_sent_at = now
+            tt2.thread_id = thread_id
+            tt2.status = "sent"
+        # Si todos los targets están sent → task pasa a awaiting_responses
+        from sqlalchemy import func as sa_func
+        pending_count = s.scalar(
+            select(sa_func.count())
+            .select_from(TaskTarget)
+            .where(TaskTarget.task_id == task_id, TaskTarget.status == "pending")
+        ) or 0
+        if pending_count == 0:
+            t = s.get(Task, task_id)
+            if t is not None and t.status in ("pending", "in_progress"):
+                t.status = "awaiting_responses"
+
+    return {
+        "ok": True,
+        "message_id": wa_resp.get("message_id"),
+        "target_id": target_id,
+        "thread_id": thread_id,
+    }
+
+
+# --- Owner reporting --------------------------------------------------------
+
+def report_to_owner(text: str, task_id: int | None = None) -> dict[str, Any]:
+    """Manda mensaje a OWNER en Telegram via la API directa.
+
+    No usa el relay-bot HTTP (sería circular). Va directo a Telegram bot API.
+    """
+    if not text or not text.strip():
+        return {"ok": False, "error": "text vacío"}
+    bot_token = settings.TELEGRAM_BOT_TOKEN if hasattr(settings, "TELEGRAM_BOT_TOKEN") else None
+    chat_id = settings.TELEGRAM_CHAT_ID if hasattr(settings, "TELEGRAM_CHAT_ID") else None
+    if not bot_token or not chat_id:
+        log.warning("report_to_owner: TELEGRAM_BOT_TOKEN/CHAT_ID no configurados")
+        return {"ok": False, "error": "telegram_not_configured"}
+
+    prefix = f"🤖 <b>Iris</b> · task #{task_id}\n" if task_id else "🤖 <b>Iris</b>\n"
+    try:
+        with httpx.Client(timeout=10) as c:
+            r = c.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                data={"chat_id": chat_id, "text": prefix + text, "parse_mode": "HTML"},
+            )
+            r.raise_for_status()
+        return {"ok": True}
+    except httpx.HTTPError as e:
+        log.exception("report_to_owner failed")
+        return {"ok": False, "error": str(e)}
+
+
+# --- Response tracking (called from chat.handle_message) --------------------
+
+def find_active_task_target(contact_id: int) -> TaskTarget | None:
+    """Si este contacto tiene un task_target en status='sent' (esperando respuesta), devuélvelo."""
+    with get_session() as s:
+        stmt = (
+            select(TaskTarget)
+            .where(TaskTarget.contact_id == contact_id, TaskTarget.status == "sent")
+            .order_by(TaskTarget.message_sent_at.desc())
+            .limit(1)
+        )
+        return s.scalar(stmt)
+
+
+def classify_and_record_response(
+    target_id: int,
+    response_text: str,
+    classification: str,
+) -> dict[str, Any]:
+    """Marca task_target como responded + classification. Si era la última pendiente, completa task."""
+    valid = {"accepted", "declined", "maybe", "clarify", "other", "no_response"}
+    if classification not in valid:
+        classification = "other"
+    now = datetime.now(timezone.utc)
+    with get_session() as s:
+        tt = s.get(TaskTarget, target_id)
+        if tt is None:
+            return {"ok": False, "error": "task_target no existe"}
+        tt.response = response_text[:2000]
+        tt.responded_at = now
+        tt.response_classification = classification
+        tt.status = "responded"
+        task_id = tt.task_id
+
+        # Si ya respondieron todos → task complete
+        from sqlalchemy import func as sa_func
+        still_waiting = s.scalar(
+            select(sa_func.count())
+            .select_from(TaskTarget)
+            .where(TaskTarget.task_id == task_id, TaskTarget.status == "sent")
+        ) or 0
+        if still_waiting == 0:
+            t = s.get(Task, task_id)
+            if t is not None and t.status != "cancelled":
+                t.status = "complete"
+                t.completed_at = now
+        return {"ok": True, "task_id": task_id, "task_complete": still_waiting == 0}

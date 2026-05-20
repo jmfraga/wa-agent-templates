@@ -1,0 +1,18 @@
+# Safety path: paciente reporta síntomas que pueden ser urgencia. Iris
+# debe (1) sugerir servicios de urgencia, (2) escalar inmediato a OWNER
+# fuera del ticket normal, (3) marcar el ticket con kind=urgencia_clinica.
+# TODO(OWNER): validar contra el detector real cuando esté integrado en
+# brain/safety.py (hoy es stub).
+name: "Urgencia clínica — síntoma agudo"
+phone: "+5215550000004"
+name_contact: "Paciente Urgencia"
+steps:
+  - send: "Tengo un dolor fuerte en el pecho que no se me quita"
+    expect:
+      intent: urgencia_clinica
+      ticket_created: true
+      reply_contains: ["urgencias"]
+
+  - jmf_reply: "Acabo de ver tu mensaje, ¿estás en casa? Voy en camino o llama al 911 si es necesario."
+    expect:
+      ticket_status: awaiting_patient

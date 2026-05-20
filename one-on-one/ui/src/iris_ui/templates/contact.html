@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}{{ contact.name or phone }} · Iris{% endblock %}
+{% block content %}
+<section class="space-y-6">
+  <header class="flex items-end justify-between">
+    <div>
+      <a href="/" class="text-xs text-slate-500 hover:text-slate-700">← Directorio</a>
+      <h1 class="text-xl font-semibold text-slate-900">{{ contact.name or "(sin nombre)" }}</h1>
+      <p class="text-sm text-slate-500 font-mono">+{{ phone }}</p>
+    </div>
+    <span class="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700">
+      {{ contact.kind or "otro" }}
+    </span>
+  </header>
+
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    {# Form de edición #}
+    <form
+      class="bg-white border border-slate-200 rounded-lg shadow-sm p-4 md:col-span-1 space-y-3"
+      hx-put="/contact/{{ phone }}"
+      hx-target="#save-result"
+      hx-swap="innerHTML"
+    >
+      <h2 class="text-sm font-semibold text-slate-700">Editar datos</h2>
+      <div>
+        <label class="block text-xs text-slate-500 mb-1">Nombre</label>
+        <input name="name" value="{{ contact.name or '' }}" class="w-full border border-slate-300 rounded-md px-3 py-1.5 text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs text-slate-500 mb-1">Kind</label>
+        <select name="kind" class="w-full border border-slate-300 rounded-md px-3 py-1.5 text-sm bg-white">
+          {% for k, label in [("owner","👑 owner"),("paciente","🩺 paciente"),("prospecto_curso","🎓 prospecto curso"),("colega","🧑‍⚕️ colega"),("asesoria","💼 asesoría"),("amigo","🤝 amigo"),("familia","👨‍👩‍👦 familia"),("otro","📩 otro")] %}
+          <option value="{{ k }}" {% if (contact.kind or 'otro') == k %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-500 mb-1">Notas</label>
+        <textarea name="notes" rows="6" class="w-full border border-slate-300 rounded-md px-3 py-1.5 text-sm font-mono">{{ contact.notes or '' }}</textarea>
+      </div>
+      <div class="flex items-center gap-2">
+        <button type="submit" class="bg-slate-900 text-white text-sm rounded-md px-4 py-1.5 hover:bg-slate-700">
+          Guardar
+        </button>
+        <span id="save-result" class="text-xs"></span>
+      </div>
+      <p class="text-xs text-slate-400">Last seen: {{ contact.last_seen or "-" }}</p>
+      <div class="border-t border-slate-200 pt-3 mt-2">
+        <button type="button"
+                hx-delete="/contact/{{ phone }}"
+                hx-target="#save-result"
+                hx-confirm="¿Eliminar este contacto definitivamente? Esto borra también sus threads, mensajes y tickets."
+                class="text-xs text-rose-600 hover:text-rose-800 underline">
+          🗑 Eliminar contacto
+        </button>
+      </div>
+    </form>
+
+    {# Thread #}
+    <div class="bg-white border border-slate-200 rounded-lg shadow-sm p-4 md:col-span-2">
+      <h2 class="text-sm font-semibold text-slate-700 mb-3">
+        Thread {% if thread and thread.id %}<span class="text-slate-400 font-normal">#{{ thread.id }}</span>{% endif %}
+      </h2>
+      <ul class="space-y-2 max-h-96 overflow-y-auto">
+        {% for m in messages %}
+        <li class="flex {% if m.direction == 'out' %}justify-end{% endif %}">
+          <div class="max-w-md rounded-lg px-3 py-2 text-sm
+                      {% if m.direction == 'out' %}bg-slate-900 text-white{% else %}bg-slate-100 text-slate-800{% endif %}">
+            <div class="whitespace-pre-wrap">{{ m.body }}</div>
+            <div class="text-[10px] mt-1 opacity-60">{{ m.ts or m.created_at }}</div>
+          </div>
+        </li>
+        {% else %}
+        <li class="text-slate-400 text-sm">Sin mensajes.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+
+  <div class="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
+    <h2 class="text-sm font-semibold text-slate-700 mb-3">Tickets</h2>
+    {% if tickets %}
+    <ul class="divide-y divide-slate-100 text-sm">
+      {% for t in tickets %}
+      <li class="py-2 flex items-center justify-between">
+        <div>
+          <div class="font-medium text-slate-800">{{ t.title or t.summary or "(sin titulo)" }}</div>
+          <div class="text-xs text-slate-500">#{{ t.id }} · {{ t.created_at }}</div>
+        </div>
+        <span class="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
+          {{ t.status }}
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-sm text-slate-400">Sin tickets.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

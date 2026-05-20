@@ -1,0 +1,20 @@
+# Prospecto pregunta por un curso. Si hay course_fact cargado, Iris
+# responde directo sin abrir ticket. Si no hay fact, escala.
+# TODO(OWNER): definir slug exacto del curso piloto y precargar course_facts
+# antes de correr este escenario.
+name: "Info de curso (EuSim u otro)"
+phone: "+5215550000003"
+name_contact: "Prospecto Cursos"
+steps:
+  - send: "Hola, vi su anuncio del curso de simulación"
+    expect:
+      intent: saludo_smalltalk
+      ticket_created: false
+
+  - send: "¿Cuándo es la próxima fecha del curso y cuánto cuesta?"
+    expect:
+      intent: info_curso
+      # NOTA: ticket_created depende de si hay course_fact precargado.
+      # Sin facts en la DB, esto va a abrir ticket → cambiar a `true`.
+      ticket_created: false
+      reply_contains: ["curso"]

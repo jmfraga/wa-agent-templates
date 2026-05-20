@@ -1,0 +1,79 @@
+{% extends "admin/_layout.html" %}
+{% block crumb %} · Metricas{% endblock %}
+
+{% block admin_content %}
+{% set tokens = metrics.get('tokens') or {} %}
+{% set haiku = tokens.get('haiku') or {} %}
+{% set sonnet = tokens.get('sonnet') or {} %}
+{% set max_v = [haiku.get('in', 0), haiku.get('out', 0), sonnet.get('in', 0), sonnet.get('out', 0)]|max %}
+{% if not max_v %}{% set max_v = 1 %}{% endif %}
+
+<div class="space-y-6 max-w-4xl">
+  <div class="rounded-lg border bg-white shadow-sm p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="font-semibold">Tokens hoy</h2>
+      <a href="#"
+         onclick="alert('TODO(OWNER): export CSV pendiente'); return false;"
+         class="text-xs text-slate-600 underline">Exportar CSV</a>
+      {# TODO(OWNER): wire export endpoint when brain exposes /admin/metrics/export. #}
+    </div>
+    <table class="w-full text-sm">
+      <thead class="text-left text-xs uppercase text-slate-500">
+        <tr><th class="py-1">Modelo</th><th>Direccion</th><th>Tokens</th><th>Bar</th></tr>
+      </thead>
+      <tbody>
+        {% for label, val in [('Haiku in', haiku.get('in', 0)),
+                              ('Haiku out', haiku.get('out', 0)),
+                              ('Sonnet in', sonnet.get('in', 0)),
+                              ('Sonnet out', sonnet.get('out', 0))] %}
+          <tr class="border-t">
+            <td class="py-2">{{ label.split(' ')[0] }}</td>
+            <td>{{ label.split(' ')[1] }}</td>
+            <td class="font-mono">{{ '{:,}'.format(val) }}</td>
+            <td class="w-1/2">
+              <div class="bg-slate-100 rounded h-3">
+                <div class="bg-slate-900 h-3 rounded" style="width: {{ (val / max_v * 100) | round(1) }}%"></div>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="mt-3 text-sm text-slate-700">
+      Costo estimado: <span class="font-semibold">${{ '%.2f' % (metrics.get('cost_usd_today', 0) or 0) }}</span> USD
+    </div>
+  </div>
+
+  <div class="rounded-lg border bg-white shadow-sm p-6">
+    <h2 class="font-semibold mb-3">Tickets cerrados (ultimos 7 dias)</h2>
+    <table class="w-full text-sm">
+      <thead class="text-left text-xs uppercase text-slate-500">
+        <tr><th class="py-1">Fecha</th><th>Cerrados</th></tr>
+      </thead>
+      <tbody>
+        {% for row in (metrics.get('tickets_closed_7d') or []) %}
+          <tr class="border-t"><td class="py-1">{{ row.get('date') }}</td><td>{{ row.get('count') }}</td></tr>
+        {% else %}
+          <tr><td colspan="2" class="py-2 text-slate-400 italic">sin datos</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="rounded-lg border bg-white shadow-sm p-6">
+    <h2 class="font-semibold mb-3">Crisis detectadas (ultimos 30 dias)</h2>
+    <table class="w-full text-sm">
+      <thead class="text-left text-xs uppercase text-slate-500">
+        <tr><th class="py-1">Categoria</th><th>Count</th></tr>
+      </thead>
+      <tbody>
+        {% for row in (metrics.get('crisis_30d_by_category') or []) %}
+          <tr class="border-t"><td class="py-1">{{ row.get('category') }}</td><td>{{ row.get('count') }}</td></tr>
+        {% else %}
+          <tr><td colspan="2" class="py-2 text-slate-400 italic">sin datos</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,18 @@
+[Unit]
+Description=Iris v2 Relay-bot Telegram (:8098)
+After=network-online.target iris-brain.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iris
+WorkingDirectory=/opt/iris/relay-bot
+EnvironmentFile=/opt/iris/relay-bot/.env
+ExecStart=/opt/iris/relay-bot/.venv/bin/uvicorn iris_relay.server:app --host 127.0.0.1 --port 8098
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/iris-relay.log
+StandardError=append:/var/log/iris-relay.log
+
+[Install]
+WantedBy=multi-user.target
