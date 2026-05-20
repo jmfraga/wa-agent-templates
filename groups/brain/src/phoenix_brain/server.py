@@ -1,13 +1,14 @@
+import base64
 import json
 from dataclasses import asdict
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select
 
-from . import app_config
+from . import anthropic_client, app_config
 from . import soul as soul_mod
 from .chat import ChatRequest, handle_chat
 from .config import settings, top
@@ -68,6 +69,12 @@ class KbIn(BaseModel):
 class FactIn(BaseModel):
     key: str
     value: str
+
+
+class IngestUrlIn(BaseModel):
+    url: str
+    mode: str = "pending_review"  # "pending_review" | "active"
+    instructions: Optional[str] = None  # Hint adicional para el extractor
 
 
 class SubscribeIn(BaseModel):
@@ -384,6 +391,222 @@ def create_fact(slug: str, payload: FactIn) -> dict:
         s.commit()
         s.refresh(f)
         return {"status": "ok", "id": f.id, "version": version}
+
+
+# ── Ingesta automática (URL / PDF → facts) ──────────────────────────
+_INGEST_TOOL = {
+    "name": "propose_facts",
+    "description": "Propone una lista de facts atómicos extraídos del contenido proporcionado para guardar en una knowledge base.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "facts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Identificador kebab-case único del fact (ej. 'precio-eusim2', 'fecha-debriefing-2026').",
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": "Contenido completo y autocontenido del fact (1-3 oraciones máximo). Incluye contexto necesario.",
+                        },
+                    },
+                    "required": ["key", "value"],
+                },
+            },
+        },
+        "required": ["facts"],
+    },
+}
+
+
+def _ingest_system_prompt(kb: KnowledgeBase, instructions: Optional[str]) -> str:
+    base = (
+        f"Tu trabajo es extraer facts atómicos del contenido proporcionado y proponerlos para guardar "
+        f"en la knowledge base '{kb.slug}' ({kb.name}).\n\n"
+        f"Descripción de la KB: {kb.description or '(sin descripción)'}.\n\n"
+        "Reglas:\n"
+        "- Cada fact debe tener un 'key' único en kebab-case, breve pero descriptivo.\n"
+        "- El 'value' debe ser autocontenido (lectura en frío entendible sin el documento original), "
+        "1-3 oraciones máximo. Incluye unidades, fechas, contexto necesario.\n"
+        "- Prioriza datos concretos: precios, fechas, nombres, lugares, requisitos, contactos, políticas.\n"
+        "- NO incluyas marketing puffery ni descripciones vagas.\n"
+        "- Si hay listas (ej. módulos de un curso), o son útiles para responder preguntas, "
+        "extráelas como facts separados o consolidadas si son cortas.\n"
+        "- Apunta a entre 5 y 30 facts dependiendo de la densidad del contenido.\n\n"
+        "Llama OBLIGATORIAMENTE al tool `propose_facts` con tu lista. No devuelvas texto suelto."
+    )
+    if instructions:
+        base += f"\n\nInstrucciones adicionales del usuario:\n{instructions}"
+    return base
+
+
+def _persist_proposed_facts(kb: KnowledgeBase, facts: list[dict], mode: str) -> list[int]:
+    status = "active" if mode == "active" else "pending_review"
+    source = "jmf" if mode == "active" else "auto"
+    saved_ids: list[int] = []
+    with get_session() as s:
+        for f in facts:
+            key = (f.get("key") or "").strip()
+            value = (f.get("value") or "").strip()
+            if not key or not value:
+                continue
+            existing = s.execute(
+                select(KbFact)
+                .where(KbFact.kb_id == kb.id, KbFact.key == key, KbFact.status == "active")
+                .order_by(KbFact.version.desc())
+            ).scalar_one_or_none()
+            version = (existing.version + 1) if existing else 1
+            if existing and status == "active":
+                existing.status = "superseded"
+            new_fact = KbFact(
+                kb_id=kb.id,
+                key=key,
+                value=value,
+                source=source,
+                version=version,
+                status=status,
+            )
+            s.add(new_fact)
+            s.flush()
+            saved_ids.append(new_fact.id)
+        s.commit()
+    return saved_ids
+
+
+def _call_extractor(kb: KnowledgeBase, instructions: Optional[str], content_blocks: list[dict]) -> dict:
+    """Llama a Anthropic Sonnet 4.6 con tool_choice=propose_facts, devuelve {ok, facts}."""
+    client = anthropic_client.get_client()
+    resp = client.messages.create(
+        model=settings.model_safety,  # Sonnet 4.6 — extracción precisa
+        max_tokens=4096,
+        system=_ingest_system_prompt(kb, instructions),
+        tools=[_INGEST_TOOL],
+        tool_choice={"type": "tool", "name": "propose_facts"},
+        messages=[{"role": "user", "content": content_blocks}],
+    )
+    for blk in resp.content:
+        if getattr(blk, "type", None) == "tool_use" and blk.name == "propose_facts":
+            args = blk.input or {}
+            return {"ok": True, "facts": args.get("facts", []), "usage": {
+                "input_tokens": resp.usage.input_tokens,
+                "output_tokens": resp.usage.output_tokens,
+            }}
+    return {"ok": False, "error": "no_tool_use_in_response"}
+
+
+@app.post("/kbs/{slug}/ingest-url")
+def kb_ingest_url(slug: str, payload: IngestUrlIn) -> dict:
+    from .tools import _handle_fetch_url, ToolContext
+
+    if payload.mode not in ("pending_review", "active"):
+        raise HTTPException(400, "mode debe ser 'pending_review' o 'active'")
+    with get_session() as s:
+        kb = s.execute(select(KnowledgeBase).where(KnowledgeBase.slug == slug)).scalar_one_or_none()
+        if not kb:
+            raise HTTPException(404, "kb not found")
+        kb_id, kb_name, kb_desc = kb.id, kb.name, kb.description
+
+    fetch = _handle_fetch_url({"url": payload.url}, ToolContext(group_id=None, is_owner=True))
+    if not fetch.get("ok"):
+        raise HTTPException(400, f"fetch failed: {fetch.get('reason')}")
+    title = fetch.get("title") or ""
+    text = fetch.get("text") or ""
+    if not text.strip():
+        raise HTTPException(400, "URL devolvió contenido vacío")
+
+    # Reconstruir el KB object para pasarlo al extractor (light)
+    class _Kb:
+        slug = ""
+        name = ""
+        description = ""
+    kbo = _Kb()
+    kbo.slug, kbo.name, kbo.description = slug, kb_name, kb_desc
+
+    content_blocks = [{
+        "type": "text",
+        "text": f"URL: {payload.url}\nTítulo: {title}\n\n--- Contenido ---\n{text}",
+    }]
+    res = _call_extractor(kbo, payload.instructions, content_blocks)
+    if not res.get("ok"):
+        raise HTTPException(500, f"extractor failed: {res.get('error')}")
+
+    facts = res["facts"]
+    with get_session() as s:
+        kb = s.get(KnowledgeBase, kb_id)
+        saved = _persist_proposed_facts(kb, facts, payload.mode)
+    return {
+        "ok": True,
+        "url": payload.url,
+        "title": title,
+        "proposed": len(facts),
+        "saved": len(saved),
+        "fact_ids": saved,
+        "mode": payload.mode,
+        "usage": res.get("usage"),
+    }
+
+
+@app.post("/kbs/{slug}/ingest-pdf")
+async def kb_ingest_pdf(
+    slug: str,
+    file: UploadFile = File(...),
+    mode: str = "pending_review",
+    instructions: Optional[str] = None,
+) -> dict:
+    if mode not in ("pending_review", "active"):
+        raise HTTPException(400, "mode debe ser 'pending_review' o 'active'")
+    if (file.content_type or "") not in ("application/pdf", "application/octet-stream"):
+        raise HTTPException(400, f"content-type debe ser application/pdf, got {file.content_type}")
+
+    data = await file.read()
+    MAX_PDF = 16 * 1024 * 1024
+    if len(data) > MAX_PDF:
+        raise HTTPException(413, f"PDF demasiado grande ({len(data)} bytes, máx {MAX_PDF})")
+
+    with get_session() as s:
+        kb = s.execute(select(KnowledgeBase).where(KnowledgeBase.slug == slug)).scalar_one_or_none()
+        if not kb:
+            raise HTTPException(404, "kb not found")
+        kb_id, kb_name, kb_desc = kb.id, kb.name, kb.description
+
+    class _Kb:
+        slug = ""
+        name = ""
+        description = ""
+    kbo = _Kb()
+    kbo.slug, kbo.name, kbo.description = slug, kb_name, kb_desc
+
+    pdf_b64 = base64.b64encode(data).decode("ascii")
+    content_blocks = [
+        {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64},
+        },
+        {"type": "text", "text": f"Archivo: {file.filename or '(sin nombre)'}\nExtrae los facts atómicos del PDF anterior."},
+    ]
+
+    res = _call_extractor(kbo, instructions, content_blocks)
+    if not res.get("ok"):
+        raise HTTPException(500, f"extractor failed: {res.get('error')}")
+
+    facts = res["facts"]
+    with get_session() as s:
+        kb = s.get(KnowledgeBase, kb_id)
+        saved = _persist_proposed_facts(kb, facts, mode)
+    return {
+        "ok": True,
+        "filename": file.filename,
+        "size_bytes": len(data),
+        "proposed": len(facts),
+        "saved": len(saved),
+        "fact_ids": saved,
+        "mode": mode,
+        "usage": res.get("usage"),
+    }
 
 
 @app.post("/facts/{fact_id}/approve")

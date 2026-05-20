@@ -16,7 +16,8 @@ from .sessions import history_for_contact, history_for_group, record_inbound, re
 from .soul import default_soul, load_group_soul
 from .tools import TOOL_DEFINITIONS, ToolContext, dispatch, subscribed_kbs_summary
 
-MAX_TOOL_LOOPS = 5
+MAX_TOOL_LOOPS = 10
+MAX_TOKENS_PER_TURN = 4096
 
 
 @dataclass
@@ -294,7 +295,7 @@ def handle_chat(req: ChatRequest) -> ChatResponse:
     for _ in range(MAX_TOOL_LOOPS):
         resp = client.messages.create(
             model=model,
-            max_tokens=1024,
+            max_tokens=MAX_TOKENS_PER_TURN,
             system=system_blocks,
             tools=TOOL_DEFINITIONS,
             messages=messages,

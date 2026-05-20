@@ -6,7 +6,7 @@ from typing import Optional
 
 import httpx
 import qrcode
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
@@ -291,3 +291,62 @@ async def api_fact_approve(fact_id: int):
 @app.delete("/api/facts/{fact_id}")
 async def api_fact_delete(fact_id: int):
     return _brain_call("DELETE", f"/facts/{fact_id}")
+
+
+# ── Ingest URL / PDF ────────────────────────────────────────────────
+@app.post("/api/kbs/{slug}/ingest-url", response_class=HTMLResponse)
+async def api_kb_ingest_url(
+    request: Request,
+    slug: str,
+    url: str = Form(...),
+    mode: str = Form("pending_review"),
+    instructions: str = Form(""),
+):
+    payload = {"url": url, "mode": mode}
+    if instructions.strip():
+        payload["instructions"] = instructions.strip()
+    try:
+        result = _brain_call("POST", f"/kbs/{slug}/ingest-url", json_body=payload)
+    except HTTPException as e:
+        return HTMLResponse(
+            f'<div class="bg-red-50 border border-red-200 text-red-800 p-3 rounded text-sm">❌ Error: {e.detail}</div>',
+            status_code=200,
+        )
+    msg = (
+        f'<div class="bg-emerald-50 border border-emerald-200 text-emerald-800 p-3 rounded text-sm">'
+        f'✅ {result.get("saved")} facts agregados ({result.get("mode")}) desde "{result.get("title") or url}". '
+        f'<a href="/kbs/{slug}" class="underline">Refresca</a> para revisarlos.</div>'
+    )
+    return HTMLResponse(msg)
+
+
+@app.post("/api/kbs/{slug}/ingest-pdf", response_class=HTMLResponse)
+async def api_kb_ingest_pdf(
+    request: Request,
+    slug: str,
+    file: UploadFile = File(...),
+    mode: str = Form("pending_review"),
+    instructions: str = Form(""),
+):
+    files = {"file": (file.filename, await file.read(), file.content_type or "application/pdf")}
+    data = {"mode": mode}
+    if instructions.strip():
+        data["instructions"] = instructions.strip()
+    with clients.brain() as c:
+        try:
+            r = c.post(f"/kbs/{slug}/ingest-pdf", files=files, data=data, timeout=120.0)
+        except Exception as e:
+            return HTMLResponse(
+                f'<div class="bg-red-50 border border-red-200 text-red-800 p-3 rounded text-sm">❌ Brain unreachable: {e}</div>'
+            )
+    if r.status_code >= 400:
+        return HTMLResponse(
+            f'<div class="bg-red-50 border border-red-200 text-red-800 p-3 rounded text-sm">❌ {r.text[:300]}</div>'
+        )
+    result = r.json()
+    msg = (
+        f'<div class="bg-emerald-50 border border-emerald-200 text-emerald-800 p-3 rounded text-sm">'
+        f'✅ {result.get("saved")} facts agregados ({result.get("mode")}) desde {result.get("filename")}. '
+        f'<a href="/kbs/{slug}" class="underline">Refresca</a> para revisarlos.</div>'
+    )
+    return HTMLResponse(msg)
