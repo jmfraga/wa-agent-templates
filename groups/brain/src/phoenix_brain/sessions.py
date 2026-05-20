@@ -21,7 +21,24 @@ def history_for_group(group_id: int, limit: Optional[int] = None) -> list[dict]:
             .limit(limit)
         ).scalars().all()
 
-    rows = list(reversed(rows))
+    return _format_rows(list(reversed(rows)))
+
+
+def history_for_contact(contact_jid: str, limit: Optional[int] = None) -> list[dict]:
+    """Mensajes 1:1 con un contacto (group_id is NULL). Mismo formato que
+    history_for_group. Útil para DMs con owner u otros contactos directos."""
+    limit = limit or settings.history_window
+    with get_session() as s:
+        rows = s.execute(
+            select(Message)
+            .where(Message.group_id.is_(None), Message.contact_jid == contact_jid)
+            .order_by(Message.ts.desc())
+            .limit(limit)
+        ).scalars().all()
+    return _format_rows(list(reversed(rows)))
+
+
+def _format_rows(rows) -> list[dict]:
     msgs: list[dict] = []
     for m in rows:
         if m.direction == "in":
@@ -66,10 +83,14 @@ def record_outbound(
     model_used: str,
     tokens_in: int,
     tokens_out: int,
+    contact_jid: Optional[str] = None,
 ) -> int:
+    """Persiste la respuesta de Phoenix. En DMs, contact_jid es el destinatario
+    (para que history_for_contact pueda recuperar la conversación completa)."""
     with get_session() as s:
         m = Message(
             group_id=group_id,
+            contact_jid=contact_jid,
             direction="out",
             body=text,
             model_used=model_used,
