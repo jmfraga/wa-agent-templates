@@ -1,0 +1,61 @@
+{% extends "_base.html" %}
+{% block content %}
+<a href="/kbs" class="text-sm text-slate-500 hover:text-orange-600">← KBs</a>
+<h1 class="text-2xl font-bold mt-1">{{kb.slug}}</h1>
+<p class="text-slate-600 mb-1">{{kb.name}}</p>
+<p class="text-sm text-slate-500 mb-6">{{kb.description or ''}}</p>
+
+<div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 mb-6">
+  <h2 class="font-semibold mb-3">Grupos que la usan</h2>
+  {% if kb.groups %}
+    <ul class="text-sm">
+      {% for g in kb.groups %}<li class="py-1"><a href="/groups/{{g.wa_jid}}" class="text-orange-600 hover:underline">{{g.display_name}}</a> <span class="text-xs text-slate-500">priority {{g.priority}}</span></li>{% endfor %}
+    </ul>
+  {% else %}
+    <p class="text-sm text-slate-500">Ningún grupo la usa todavía. Suscríbela desde la página del grupo.</p>
+  {% endif %}
+</div>
+
+<div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 mb-6">
+  <h2 class="font-semibold mb-3">Agregar fact</h2>
+  <form hx-post="/api/kbs/{{kb.slug}}/facts" hx-on::after-request="if(event.detail.successful) window.location.reload()" class="grid grid-cols-1 md:grid-cols-3 gap-3">
+    <div>
+      <label class="block text-xs text-slate-500">Key</label>
+      <input name="key" required class="w-full border border-slate-300 rounded px-2 py-1 text-sm" placeholder="ej. precio-eusim2">
+    </div>
+    <div class="md:col-span-2">
+      <label class="block text-xs text-slate-500">Value</label>
+      <textarea name="value" rows="2" required class="w-full border border-slate-300 rounded px-2 py-1 text-sm"></textarea>
+    </div>
+    <button class="md:col-span-3 justify-self-end bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold px-3 py-1.5 rounded">Guardar fact</button>
+  </form>
+</div>
+
+<h2 class="font-semibold mb-3">Facts</h2>
+<div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-50 text-slate-600 text-xs uppercase">
+      <tr><th class="text-left p-3">Key</th><th class="text-left p-3">Value</th><th class="text-left p-3">v</th><th class="text-left p-3">Status</th><th class="text-left p-3">Source</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for f in kb.facts %}
+      <tr class="border-t border-slate-100 {% if f.status=='pending_review' %}bg-amber-50{% elif f.status=='superseded' %}text-slate-400{% endif %}">
+        <td class="p-3 font-mono">{{f.key}}</td>
+        <td class="p-3 max-w-md"><div class="line-clamp-3">{{f.value}}</div></td>
+        <td class="p-3">v{{f.version}}</td>
+        <td class="p-3"><code class="text-xs">{{f.status}}</code></td>
+        <td class="p-3"><code class="text-xs">{{f.source}}</code></td>
+        <td class="p-3 text-right whitespace-nowrap">
+          {% if f.status=='pending_review' %}
+            <button hx-post="/api/facts/{{f.id}}/approve" hx-confirm="¿Aprobar este fact?" hx-on::after-request="if(event.detail.successful) window.location.reload()" class="text-emerald-600 hover:underline text-xs">Aprobar</button>
+          {% endif %}
+          <button hx-delete="/api/facts/{{f.id}}" hx-confirm="¿Borrar fact #{{f.id}}?" hx-on::after-request="if(event.detail.successful) window.location.reload()" class="text-red-600 hover:underline text-xs ml-3">Borrar</button>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="p-6 text-center text-slate-500">Aún no hay facts.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

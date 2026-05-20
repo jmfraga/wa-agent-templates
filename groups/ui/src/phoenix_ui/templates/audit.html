@@ -1,0 +1,25 @@
+{% extends "_base.html" %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-2">Audit log</h1>
+<p class="text-sm text-slate-500 mb-6">Decisiones de Phoenix (crisis detector, proactive classifier, etc.). Las más recientes primero.</p>
+
+<div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-50 text-slate-600 text-xs uppercase">
+      <tr><th class="text-left p-3">Cuándo</th><th class="text-left p-3">Tipo</th><th class="text-left p-3">Grupo</th><th class="text-left p-3">Detalle</th></tr>
+    </thead>
+    <tbody>
+    {% for a in audit %}
+      <tr class="border-t border-slate-100 align-top">
+        <td class="p-3 text-xs text-slate-500 whitespace-nowrap">{{a.ts}}</td>
+        <td class="p-3"><code class="text-xs">{{a.kind}}</code></td>
+        <td class="p-3 text-xs font-mono">{{a.group_jid or ''}}</td>
+        <td class="p-3 text-xs"><div class="text-slate-700">{{a.summary}}</div><details class="mt-1"><summary class="cursor-pointer text-slate-400 text-[10px]">payload</summary><pre class="text-[10px] bg-slate-50 p-2 rounded mt-1 overflow-x-auto">{{a.payload_pretty}}</pre></details></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="p-6 text-center text-slate-500">Sin eventos aún.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends "_base.html" %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Dashboard</h1>
+
+{% if not health.anthropic_key_set %}
+<div class="bg-amber-50 border border-amber-200 rounded p-3 mb-4 text-sm text-amber-900">
+  ⚠️ <code>ANTHROPIC_API_KEY</code> no está seteada. Phoenix no podrá responder.
+</div>
+{% endif %}
+{% if not health.owner_jid_set %}
+<div class="bg-amber-50 border border-amber-200 rounded p-3 mb-4 text-sm text-amber-900">
+  ⚠️ <code>PHOENIX_OWNER_JID</code> no está seteada. Slash commands no funcionarán y el detector de crisis no podrá avisarte.
+</div>
+{% endif %}
+
+<div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
+  <div class="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
+    <div class="text-xs uppercase text-slate-500">Grupos</div>
+    <div class="text-3xl font-bold">{{health.counts.groups}}</div>
+  </div>
+  <div class="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
+    <div class="text-xs uppercase text-slate-500">Knowledge bases</div>
+    <div class="text-3xl font-bold">{{health.counts.kbs}}</div>
+  </div>
+  <div class="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
+    <div class="text-xs uppercase text-slate-500">Facts activos</div>
+    <div class="text-3xl font-bold">{{health.counts.facts_active}}</div>
+  </div>
+  <div class="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
+    <div class="text-xs uppercase text-slate-500">Facts pending</div>
+    <div class="text-3xl font-bold {% if health.counts.facts_pending %}text-amber-600{% endif %}">{{health.counts.facts_pending}}</div>
+  </div>
+  <div class="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
+    <div class="text-xs uppercase text-slate-500">Mensajes 24h</div>
+    <div class="text-3xl font-bold">{{health.counts.messages_24h}}</div>
+  </div>
+  <div class="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
+    <div class="text-xs uppercase text-slate-500">Drafts pendientes</div>
+    <div class="text-3xl font-bold {% if health.counts.drafts_pending %}text-amber-600{% endif %}">{{health.counts.drafts_pending}}</div>
+  </div>
+</div>
+
+<h2 class="text-lg font-semibold mb-3">Grupos</h2>
+<div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden mb-8">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-50 text-slate-600 text-xs uppercase">
+      <tr><th class="text-left p-3">Nombre</th><th class="text-left p-3">Modo</th><th class="text-left p-3">KBs</th><th class="text-left p-3">Msgs</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for g in groups %}
+      <tr class="border-t border-slate-100 hover:bg-slate-50">
+        <td class="p-3">
+          <div class="font-medium">{{g.display_name}}</div>
+          <div class="text-xs text-slate-500 font-mono">{{g.wa_jid}}</div>
+        </td>
+        <td class="p-3"><span class="badge badge-{{g.mode}}">{{g.mode}}</span></td>
+        <td class="p-3">{{g.counts.kbs}}</td>
+        <td class="p-3">{{g.counts.messages}}</td>
+        <td class="p-3 text-right"><a href="/groups/{{g.wa_jid}}" class="text-orange-600 hover:underline">Editar →</a></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="p-6 text-center text-slate-500">Aún no hay grupos. Phoenix los registra automáticamente la primera vez que llega un mensaje.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2 class="text-lg font-semibold mb-3">Audit reciente</h2>
+<div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-50 text-slate-600 text-xs uppercase">
+      <tr><th class="text-left p-3">Cuándo</th><th class="text-left p-3">Tipo</th><th class="text-left p-3">Grupo</th><th class="text-left p-3">Detalle</th></tr>
+    </thead>
+    <tbody>
+    {% for a in audit %}
+      <tr class="border-t border-slate-100">
+        <td class="p-3 text-xs text-slate-500">{{a.ts}}</td>
+        <td class="p-3"><code class="text-xs">{{a.kind}}</code></td>
+        <td class="p-3 text-xs font-mono">{{a.group_jid or ''}}</td>
+        <td class="p-3 text-xs text-slate-600">{{a.summary}}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="p-6 text-center text-slate-500">Sin eventos aún.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="p-3 text-right"><a href="/audit" class="text-sm text-orange-600 hover:underline">Ver todo →</a></div>
+</div>
+{% endblock %}

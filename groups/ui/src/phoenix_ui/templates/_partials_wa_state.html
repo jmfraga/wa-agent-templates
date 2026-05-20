@@ -1,0 +1,1 @@
+{% if state %}<span class="badge badge-{{state}}">WA: {{state}}{% if my_jid %} · {{my_jid.split('@')[0]}}{% endif %}</span>{% else %}<span class="badge badge-disconnected">listener offline</span>{% endif %}

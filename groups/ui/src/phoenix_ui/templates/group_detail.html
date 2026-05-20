@@ -1,0 +1,83 @@
+{% extends "_base.html" %}
+{% block title %}{{g.display_name}} · Phoenix{% endblock %}
+{% block content %}
+<a href="/groups" class="text-sm text-slate-500 hover:text-orange-600">← Grupos</a>
+<form class="mt-1 flex items-center gap-2" hx-patch="/api/groups/{{g.wa_jid}}/name" hx-swap="none" hx-on::after-request="if(event.detail.successful){this.querySelector('button').textContent='✓'; setTimeout(()=>this.querySelector('button').textContent='Guardar',1500)}">
+  <input type="text" name="display_name" value="{{g.display_name}}" class="text-2xl font-bold border-b border-transparent hover:border-slate-300 focus:border-orange-500 focus:outline-none px-1 -mx-1 flex-1 bg-transparent" required>
+  <button type="submit" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded">Guardar</button>
+</form>
+<div class="text-xs text-slate-500 font-mono mb-4">{{g.wa_jid}}</div>
+
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+  <!-- Modo -->
+  <div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5">
+    <h2 class="font-semibold mb-3">Modo</h2>
+    <form hx-patch="/api/groups/{{g.wa_jid}}/mode" hx-swap="none" hx-trigger="change">
+      <label class="block mb-2"><input type="radio" name="mode" value="lurker" {% if g.mode=='lurker' %}checked{% endif %}> <span class="badge badge-lurker">lurker</span> <span class="text-xs text-slate-500">— responde sólo si lo mencionan</span></label>
+      <label class="block mb-2"><input type="radio" name="mode" value="proactive" {% if g.mode=='proactive' %}checked{% endif %}> <span class="badge badge-proactive">proactive</span> <span class="text-xs text-slate-500">— clasifica + interviene relevante</span></label>
+      <label class="block mb-2"><input type="radio" name="mode" value="on_command_only" {% if g.mode=='on_command_only' %}checked{% endif %}> <span class="badge badge-on_command_only">on_command_only</span> <span class="text-xs text-slate-500">— sólo owner con /phoenix</span></label>
+    </form>
+    {% if g.last_proactive_at %}<div class="text-xs text-slate-500 mt-3">Última intervención proactiva: {{g.last_proactive_at}}</div>{% endif %}
+  </div>
+
+  <!-- KBs suscritas -->
+  <div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 md:col-span-2">
+    <h2 class="font-semibold mb-3">Knowledge bases suscritas</h2>
+    <ul class="text-sm mb-4">
+      {% for kb in g.kbs %}
+        <li class="flex items-center justify-between border-b border-slate-100 py-2">
+          <div>
+            <span class="font-medium">{{kb.slug}}</span>
+            <span class="text-slate-500">— {{kb.name}}</span>
+            <span class="text-xs text-slate-400">(priority {{kb.priority}})</span>
+          </div>
+          <form hx-delete="/api/groups/{{g.wa_jid}}/kbs/{{kb.slug}}" hx-confirm="¿Quitar suscripción a {{kb.slug}}?" hx-swap="outerHTML" hx-target="closest li">
+            <button class="text-xs text-red-600 hover:underline">Quitar</button>
+          </form>
+        </li>
+      {% else %}
+        <li class="text-slate-500 text-sm py-2">Sin KBs suscritas todavía.</li>
+      {% endfor %}
+    </ul>
+    <form hx-post="/api/groups/{{g.wa_jid}}/kbs" class="flex gap-2 items-end" hx-on::after-request="if(event.detail.successful) window.location.reload()">
+      <div class="flex-1">
+        <label class="block text-xs text-slate-500">KB</label>
+        <select name="kb_slug" class="w-full border border-slate-300 rounded px-2 py-1 text-sm">
+          {% for kb in all_kbs %}<option value="{{kb.slug}}">{{kb.slug}} — {{kb.name}}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-500">Priority</label>
+        <input type="number" name="priority" value="0" class="w-20 border border-slate-300 rounded px-2 py-1 text-sm">
+      </div>
+      <button class="bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold px-3 py-1.5 rounded">Suscribir</button>
+    </form>
+  </div>
+
+  <!-- Danger zone -->
+  <div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 md:col-span-3 border-red-200">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-red-700">Borrar grupo</h2>
+        <p class="text-xs text-slate-500 mt-1">Elimina el grupo de la DB, junto con sus SOULs versionados, suscripciones a KBs y mensajes históricos. Phoenix lo volverá a auto-registrar si recibe un mensaje del JID después.</p>
+      </div>
+      <button hx-delete="/api/groups/{{g.wa_jid}}" hx-confirm="¿Borrar {{g.display_name}} y todo su historial? Esto NO se puede deshacer." hx-on::after-request="if(event.detail.successful) window.location.href='/groups'" class="bg-red-600 hover:bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded whitespace-nowrap">Borrar grupo</button>
+    </div>
+  </div>
+
+  <!-- SOUL -->
+  <div class="bg-white rounded-lg border border-slate-200 shadow-sm p-5 md:col-span-3">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold">SOUL del grupo</h2>
+      <div class="text-xs text-slate-500">versión {{g.soul.version}}{% if g.soul.updated_at %} · {{g.soul.updated_at}}{% endif %}</div>
+    </div>
+    <form hx-put="/api/groups/{{g.wa_jid}}/soul" hx-swap="none" hx-on::after-request="if(event.detail.successful){this.querySelector('button[type=submit]').textContent='✓ Guardado'; setTimeout(()=>{this.querySelector('button[type=submit]').textContent='Guardar SOUL';},2000)}">
+      <textarea name="soul_md" rows="14" class="w-full font-mono text-sm border border-slate-300 rounded p-3" placeholder="Eres Phoenix en el grupo X. Tu especialidad es...">{{g.soul.soul_md}}</textarea>
+      <div class="flex items-center justify-between mt-3">
+        <p class="text-xs text-slate-500">Cada guardado crea una nueva versión. El SOUL anterior queda registrado pero inactivo.</p>
+        <button type="submit" class="bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold px-4 py-2 rounded">Guardar SOUL</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

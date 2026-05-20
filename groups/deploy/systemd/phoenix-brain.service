@@ -1,0 +1,17 @@
+[Unit]
+Description=Phoenix v2 brain daemon
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/phoenix/brain
+EnvironmentFile=%h/phoenix/.env
+EnvironmentFile=%h/phoenix/brain/.env
+ExecStart=%h/.local/bin/uv run uvicorn phoenix_brain.server:app --host 127.0.0.1 --port 8102
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/phoenix/logs/brain.log
+StandardError=append:%h/phoenix/logs/brain.err
+
+[Install]
+WantedBy=default.target
