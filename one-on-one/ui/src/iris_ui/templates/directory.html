@@ -7,6 +7,43 @@
       <h1 class="text-xl font-semibold text-slate-900">Directorio</h1>
       <p class="text-sm text-slate-500">Contactos conocidos del brain.</p>
     </div>
+    <details class="relative">
+      <summary class="cursor-pointer bg-slate-900 text-white text-sm rounded-md px-4 py-2 hover:bg-slate-700 list-none">
+        ➕ Nuevo contacto
+      </summary>
+      <form hx-post="/contact/new"
+            hx-target="#new-contact-result"
+            hx-swap="innerHTML"
+            class="absolute right-0 mt-2 z-20 w-96 bg-white border border-slate-200 rounded-lg shadow-lg p-4 space-y-2">
+        <h3 class="text-sm font-semibold text-slate-700">Agregar contacto</h3>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Teléfono (con código país)</label>
+          <input name="phone" required placeholder="+52 1 442 123 4567"
+                 class="w-full border border-slate-300 rounded-md px-3 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Nombre</label>
+          <input name="name" placeholder="Nombre completo"
+                 class="w-full border border-slate-300 rounded-md px-3 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Tipo</label>
+          <select name="kind" class="w-full border border-slate-300 rounded-md px-3 py-1.5 text-sm bg-white">
+            {% for k, label in [("paciente","🩺 paciente"),("prospecto_curso","🎓 prospecto curso"),("colega","🧑‍⚕️ colega"),("asesoria","💼 asesoría"),("amigo","🤝 amigo"),("familia","👨‍👩‍👦 familia"),("otro","📩 otro")] %}
+            <option value="{{ k }}" {% if k == 'otro' %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Notas (opcional)</label>
+          <textarea name="notes" rows="2" class="w-full border border-slate-300 rounded-md px-3 py-1.5 text-sm"></textarea>
+        </div>
+        <button type="submit" class="w-full bg-slate-900 text-white text-sm rounded-md px-3 py-1.5 hover:bg-slate-700">
+          Guardar
+        </button>
+        <div id="new-contact-result" class="text-xs"></div>
+      </form>
+    </details>
   </header>
 
   <form

@@ -460,6 +460,48 @@ async def admin_contact_search(request: Request, search: str = "") -> HTMLRespon
     )
 
 
+@router.put("/tickets/{ticket_id}/edit", response_class=HTMLResponse)
+async def admin_ticket_edit(
+    request: Request,
+    ticket_id: int,
+    kind: str = Form(""),
+    summary: str = Form(""),
+    draft_for_owner: str = Form(""),
+) -> HTMLResponse:
+    from fastapi.responses import HTMLResponse as _HTML
+    import httpx
+    payload = {}
+    if kind:
+        payload["kind"] = kind
+    if summary:
+        payload["summary"] = summary
+    if draft_for_owner:
+        payload["draft_for_owner"] = draft_for_owner
+    async with httpx.AsyncClient(timeout=10) as c:
+        try:
+            r = await c.put(f"{settings.BRAIN_URL}/tickets/{ticket_id}", json=payload)
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            return _HTML(f'<div class="p-2 text-rose-700">✗ {e}</div>')
+    return _HTML(f'<div class="p-2 text-emerald-700">✓ Ticket #{ticket_id} actualizado</div>')
+
+
+@router.delete("/tickets/{ticket_id}/delete", response_class=HTMLResponse)
+async def admin_ticket_delete(request: Request, ticket_id: int) -> HTMLResponse:
+    from fastapi.responses import HTMLResponse as _HTML
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as c:
+        try:
+            r = await c.delete(f"{settings.BRAIN_URL}/tickets/{ticket_id}")
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            return _HTML(f'<div class="p-2 text-rose-700">✗ {e}</div>')
+    return _HTML(
+        f'<div class="p-2 text-emerald-700">🗑 Ticket #{ticket_id} eliminado — '
+        f'<a href="/admin/tickets" class="underline">refrescar</a></div>'
+    )
+
+
 @router.post("/tasks/new/preview", response_class=HTMLResponse)
 async def admin_task_preview(
     request: Request,
