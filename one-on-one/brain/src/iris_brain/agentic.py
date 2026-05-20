@@ -4,7 +4,7 @@ Funciones de soporte para los tools agentic_*. La capa de tools en tools.py
 las llama y devuelve resultados a Anthropic SDK.
 
 Decisiones congeladas:
-- Confirmación explícita: Iris construye plan, OWNER aprueba, ENTONCES se envía.
+- Confirmación explícita: Iris construye plan, owner aprueba, ENTONCES se envía.
 - Canal de instrucción: Telegram (POST a relay-bot endpoint).
 - Reportes en vivo: ping a Telegram cada vez que un target responde.
 - Send is final: WhatsApp no permite unsend reliable post-segundos.
@@ -70,7 +70,7 @@ def create_task(
 ) -> dict[str, Any]:
     """Crea task + N task_targets en status='pending'.
 
-    No envía mensajes — eso lo hace send_outbound después de la confirmación de OWNER.
+    No envía mensajes — eso lo hace send_outbound después de la confirmación de owner.
 
     Guardrails:
     - owner_id NUNCA puede estar en target_contact_ids (Iris no debe escribirle al owner).
@@ -141,7 +141,7 @@ def create_task(
                         "ok": False,
                         "error": (
                             f"No encontré ningún contacto que matchee con '{expected}'. "
-                            f"Pídele a OWNER el teléfono específico o varía el nombre."
+                            f"Pídele a owner el teléfono específico o varía el nombre."
                         ),
                     }
                 if len(candidates) > 1:
@@ -150,7 +150,7 @@ def create_task(
                         "ok": False,
                         "error": (
                             f"Encontré {len(candidates)} candidatos para '{expected}': {options}. "
-                            f"Pídele a OWNER que elija o re-busca con criterio más específico (apellido completo, etc)."
+                            f"Pídele a owner que elija o re-busca con criterio más específico (apellido completo, etc)."
                         ),
                     }
                 # Único match — usar y registrar la corrección
@@ -199,7 +199,7 @@ def create_task(
             result["auto_corrections"] = auto_corrections
             result["warning"] = (
                 "Hubo correcciones automáticas — algunos contact_id que pasaste no coincidían con expected_names. "
-                "El server resolvió por nombre. REVISA targets[] antes de continuar y avísale a OWNER en tu reporte de plan."
+                "El server resolvió por nombre. REVISA targets[] antes de continuar y avísale a owner en tu reporte de plan."
             )
         return result
 
@@ -354,7 +354,7 @@ def send_outbound(task_id: int, target_id: int, body: str) -> dict[str, Any]:
 # --- Owner reporting --------------------------------------------------------
 
 def report_to_owner(text: str, task_id: int | None = None) -> dict[str, Any]:
-    """Manda mensaje a OWNER en Telegram via la API directa.
+    """Manda mensaje a owner en Telegram via la API directa.
 
     No usa el relay-bot HTTP (sería circular). Va directo a Telegram bot API.
     """
@@ -382,8 +382,58 @@ def report_to_owner(text: str, task_id: int | None = None) -> dict[str, Any]:
 
 # --- Response tracking (called from chat.handle_message) --------------------
 
-def find_active_task_target(contact_id: int) -> TaskTarget | None:
-    """Si este contacto tiene un task_target en status='sent' (esperando respuesta), devuélvelo."""
+def classify_response(message_sent: str, response_text: str, anthropic_client=None) -> dict[str, Any]:
+    """Clasifica la respuesta de un target a un outbound de Iris.
+
+    Returns {classification, reasoning}. classification ∈
+    {accepted, declined, maybe, clarify, other}.
+    """
+    import anthropic
+    from .config import settings
+
+    valid = {"accepted", "declined", "maybe", "clarify", "other"}
+    if not response_text or not response_text.strip():
+        return {"classification": "other", "reasoning": "empty response"}
+
+    client = anthropic_client or anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    system_prompt = (
+        "Clasifica la respuesta de un contacto a un mensaje outbound. Categorías:\n"
+        "- accepted: confirma, acepta, dice sí, va, dale, perfecto\n"
+        "- declined: rechaza, dice no, no puede, no podrá, no le queda\n"
+        "- maybe: tentativo, condicional ('a ver', 'depende', 'creo que sí pero...')\n"
+        "- clarify: pide más info, aclara, hace pregunta antes de comprometerse\n"
+        "- other: cualquier otra cosa (saludo, comentario aleatorio, fuera de tema)\n\n"
+        "Devuelve SOLO JSON: {\"classification\": \"<cat>\", \"reasoning\": \"<breve>\"}. Sin texto adicional."
+    )
+    user_msg = f"Mensaje enviado por el asistente:\n{message_sent}\n\nRespuesta del contacto:\n{response_text}"
+
+    try:
+        resp = client.messages.create(
+            model=settings.IRIS_BRAIN_MODEL_DEFAULT,
+            max_tokens=120,
+            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        raw = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
+        raw = raw.strip("`")
+        if raw.startswith("json"):
+            raw = raw[4:].strip()
+        import json
+        data = json.loads(raw)
+        c = data.get("classification", "other")
+        if c not in valid:
+            c = "other"
+        return {"classification": c, "reasoning": data.get("reasoning", "")}
+    except Exception as e:  # noqa: BLE001
+        log.exception("classify_response failed")
+        return {"classification": "other", "reasoning": f"classifier error: {e}"}
+
+
+def find_active_task_target(contact_id: int) -> dict[str, Any] | None:
+    """Si este contacto tiene un task_target en status='sent' (esperando respuesta), devuélvelo como dict.
+
+    Devuelve dict para evitar DetachedInstanceError al acceder atributos fuera de sesión.
+    """
     with get_session() as s:
         stmt = (
             select(TaskTarget)
@@ -391,7 +441,16 @@ def find_active_task_target(contact_id: int) -> TaskTarget | None:
             .order_by(TaskTarget.message_sent_at.desc())
             .limit(1)
         )
-        return s.scalar(stmt)
+        tt = s.scalar(stmt)
+        if tt is None:
+            return None
+        return {
+            "id": tt.id,
+            "task_id": tt.task_id,
+            "contact_id": tt.contact_id,
+            "message_sent": tt.message_sent,
+            "message_sent_at": tt.message_sent_at.isoformat() if tt.message_sent_at else None,
+        }
 
 
 def classify_and_record_response(
@@ -413,6 +472,7 @@ def classify_and_record_response(
         tt.response_classification = classification
         tt.status = "responded"
         task_id = tt.task_id
+        s.flush()  # asegura que el UPDATE de tt.status se ve en queries siguientes
 
         # Si ya respondieron todos → task complete
         from sqlalchemy import func as sa_func
@@ -423,7 +483,8 @@ def classify_and_record_response(
         ) or 0
         if still_waiting == 0:
             t = s.get(Task, task_id)
-            if t is not None and t.status != "cancelled":
+            if t is not None and t.status not in ("cancelled", "complete"):
                 t.status = "complete"
                 t.completed_at = now
+                log.info("task %s → complete (todos los targets respondieron)", task_id)
         return {"ok": True, "task_id": task_id, "task_complete": still_waiting == 0}

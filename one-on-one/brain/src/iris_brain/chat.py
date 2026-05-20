@@ -6,8 +6,8 @@ Pipeline:
   3. Insertar message in
   4. classify_intent (Haiku)
   5. Si urgencia_clinica → detect_crisis (Sonnet)
-  6. Si crisis → respuesta inmediata + ping OWNER urgente
-  7. Si intent requiere OWNER → open_ticket + respuesta puente
+  6. Si crisis → respuesta inmediata + ping owner urgente
+  7. Si intent requiere owner → open_ticket + respuesta puente
   8. Si info_curso → consulta kb_facts; si hay, responde; si no, ticket
   9. Otros → respuesta directa con SOUL via Haiku + tool-use loop (max 5)
 """
@@ -28,7 +28,7 @@ log = logging.getLogger("iris_brain.chat")
 
 MAX_TOOL_ITERATIONS = 5
 
-# Intents que siempre escalan a OWNER.
+# Intents que siempre escalan a owner.
 ESCALATE_INTENTS = {"consulta_cita", "info_asesoria", "seguimiento_paciente", "pago_facturacion"}
 
 _client: anthropic.Anthropic | None = None
@@ -63,7 +63,7 @@ def _system_blocks(contact_id: int | None = None, thread_id: int | None = None) 
         ]
         if thread_id is not None:
             lines.insert(1, f"- **thread_id: {thread_id}** (úsalo SIEMPRE así en open_ticket, NO uses el phone)")
-        # contact_id es necesario para tools agentic cuando OWNER habla (owner_id en create_task).
+        # contact_id es necesario para tools agentic cuando owner habla (owner_id en create_task).
         lines.insert(1, f"- **contact_id: {c.id}** (úsalo como owner_id en create_task si eres modo owner)")
         if not c.name:
             lines.append(
@@ -200,7 +200,7 @@ def handle_message(
     model_used = settings.IRIS_BRAIN_MODEL_DEFAULT
     cphone, cname = _contact_card(contact_id)
 
-    # 3.5 Modo owner — OWNER dicta instrucciones (agéntico). Bypass safety + intent classify.
+    # 3.5 Modo owner — owner dicta instrucciones (agéntico). Bypass safety + intent classify.
     # Iris responde con tools agentic (search_contacts, create_task, send_outbound, etc).
     contact_kind = None
     with get_session() as s:
@@ -279,14 +279,61 @@ def handle_message(
             "model": model_used,
         }
 
-    # 5. Clasificar intent (solo si no hubo crisis).
+    # 4.5 Response tracking — si este contacto tiene un task_target.status='sent',
+    # esta entrada es la respuesta al outbound de Iris, NO una nueva consulta.
+    # Clasificar, registrar, ping al owner. NO abrir ticket.
+    from . import agentic
+    active_tt = agentic.find_active_task_target(contact_id)
+    if active_tt is not None:
+        cls = agentic.classify_response(active_tt["message_sent"] or "", text)
+        agentic.classify_and_record_response(active_tt["id"], text, cls["classification"])
+        # Reportar a owner en vivo
+        emoji = {
+            "accepted": "✅", "declined": "❌", "maybe": "🤔",
+            "clarify": "❓", "other": "💬",
+        }.get(cls["classification"], "💬")
+        cname_display = cname or cphone or "(contacto)"
+        report = (
+            f"{emoji} <b>{cname_display}</b> respondió ({cls['classification']}) a task #{active_tt['task_id']}:\n"
+            f"<blockquote>{text[:300]}</blockquote>"
+        )
+        agentic.report_to_owner(report, task_id=active_tt["task_id"])
+        # Reply al contacto con un breve acknowledgment
+        ack = {
+            "accepted": "Perfecto, le aviso al doctor. 🙏",
+            "declined": "Entendido, le paso el mensaje al doctor.",
+            "maybe": "Va, le aviso al doctor que estás viendo. Quedo al pendiente.",
+            "clarify": "Le paso tu duda al doctor y te confirmo.",
+            "other": "Gracias, le aviso al doctor.",
+        }[cls["classification"]]
+        sessions.append_message(thread_id, MessageDirection.out, ack, model_used="task_response_ack")
+        log.info(
+            "response tracking: contact_id=%s target_id=%s cls=%s",
+            contact_id, active_tt["id"], cls["classification"],
+        )
+        return {
+            "ok": True,
+            "thread_id": thread_id,
+            "contact_id": contact_id,
+            "intent": "task_response",
+            "intent_confidence": 1.0,
+            "safety": None,
+            "ticket_id": None,
+            "reply": ack,
+            "model": "task_response_pipeline",
+            "task_id": active_tt["task_id"],
+            "task_target_id": active_tt["id"],
+            "classification": cls["classification"],
+        }
+
+    # 5. Clasificar intent (solo si no hubo crisis ni task_response).
     from . import intents
     intent_result = intents.classify_intent(text, history=history)
     intent = intent_result["intent"]
     intent_confidence = intent_result["confidence"]
     log.info("intent=%s conf=%.2f phone=%s", intent, intent_confidence, contact_phone)
 
-    # 7. Intents que escalan a OWNER: abrimos ticket programáticamente y
+    # 7. Intents que escalan a owner: abrimos ticket programáticamente y
     # dejamos que Iris genere una respuesta personalizada usando el contexto.
     usage_out: dict | None = None
     if intent in ESCALATE_INTENTS:
@@ -317,10 +364,10 @@ def handle_message(
                 "content": (
                     f"{msgs[-1]['content']}\n\n"
                     f"[nota interna del sistema, NO la repitas: ya abrí el ticket #{ticket_id} "
-                    f"de tipo {intent} con OWNER. Solo responde al paciente con una frase puente "
+                    f"de tipo {intent} con owner. Solo responde al paciente con una frase puente "
                     f"breve (1-2 líneas), personalizada con su nombre si lo sabes, en tono cálido "
-                    f"de Iris. Ejemplos: 'Gracias {{nombre}}, déjame checar con el owner', "
-                    f"'Va, paso el contexto al owner y te confirmo en cuanto sepa', etc. Varía.]"
+                    f"de Iris. Ejemplos: 'Gracias {{nombre}}, déjame checar con el doctor', "
+                    f"'Va, paso el contexto al Dr. Owner y te confirmo en cuanto sepa', etc. Varía.]"
                 ),
             }
         reply, usage_out, _stop = _direct_reply(msgs, contact_id=contact_id, thread_id=thread_id)
