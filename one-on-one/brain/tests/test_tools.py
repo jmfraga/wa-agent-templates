@@ -17,19 +17,19 @@ def _seed_facts():
                 kb_slug="blsacls",
                 key="precio_mxn",
                 value="$4,500 MXN + IVA",
-                source=KbFactSource.jmf,
+                source=KbFactSource.owner,
             ),
             KbFact(
                 kb_slug="blsacls",
                 key="landing_url",
                 value="https://example.com/service-b/blsacls",
-                source=KbFactSource.jmf,
+                source=KbFactSource.owner,
             ),
             KbFact(
                 kb_slug="eusim2",
                 key="fechas",
                 value="6 sesiones, jueves 7-9 pm",
-                source=KbFactSource.jmf,
+                source=KbFactSource.owner,
             ),
         ])
 

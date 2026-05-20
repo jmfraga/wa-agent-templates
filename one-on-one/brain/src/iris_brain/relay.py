@@ -1,7 +1,7 @@
 """Clientes HTTP para relays.
 
 Sprint 2 frozen decision:
-- send_to_jmf  → relay-bot Telegram (JMF_RELAY_WEBHOOK, default :8098).
+- send_to_owner  → relay-bot Telegram (OWNER_RELAY_WEBHOOK, default :8098).
 - send_to_contact → wa-listener (CONTACT_RELAY_WEBHOOK, default :8099).
 
 El wa-listener exige `phone`, no `thread_id`; lo resolvemos consultando la DB.
@@ -37,12 +37,12 @@ def _resolve_phone(thread_id: int) -> str | None:
 class Relay:
     def __init__(
         self,
-        jmf_webhook_url: str | None = None,
+        owner_webhook_url: str | None = None,
         contact_webhook_url: str | None = None,
         client: httpx.Client | None = None,
     ) -> None:
-        self.jmf_webhook_url = (
-            jmf_webhook_url if jmf_webhook_url is not None else settings.JMF_RELAY_WEBHOOK
+        self.owner_webhook_url = (
+            owner_webhook_url if owner_webhook_url is not None else settings.OWNER_RELAY_WEBHOOK
         )
         self.contact_webhook_url = (
             contact_webhook_url
@@ -63,20 +63,20 @@ class Relay:
             log.exception("%s relay POST falló", label)
             return {"ok": False, "error": str(e)}
 
-    def send_to_jmf(self, ticket: dict[str, Any]) -> dict[str, Any]:
+    def send_to_owner(self, ticket: dict[str, Any]) -> dict[str, Any]:
         """Manda ticket al relay-bot Telegram para aprobación/respuesta de OWNER."""
         payload = {
-            "type": "ticket_to_jmf",
+            "type": "ticket_to_owner",
             "ticket_id": ticket.get("id") or ticket.get("ticket_id"),
             "thread_id": ticket.get("thread_id"),
             "kind": ticket.get("kind"),
             "summary": ticket.get("summary"),
-            "draft_for_jmf": ticket.get("draft_for_jmf"),
+            "draft_for_owner": ticket.get("draft_for_owner"),
             "urgent": ticket.get("urgent", False),
             "contact_phone": ticket.get("contact_phone"),
             "contact_name": ticket.get("contact_name"),
         }
-        return self._post(self.jmf_webhook_url, payload, label="jmf")
+        return self._post(self.owner_webhook_url, payload, label="owner")
 
     def send_to_contact(self, thread_id: int, body: str) -> dict[str, Any]:
         """Manda respuesta de OWNER al contacto vía wa-listener.

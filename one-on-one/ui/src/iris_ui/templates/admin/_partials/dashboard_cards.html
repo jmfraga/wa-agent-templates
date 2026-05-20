@@ -3,11 +3,11 @@
   <div class="rounded-lg border bg-white shadow-sm p-4">
     <div class="text-xs text-slate-500">Tickets pending</div>
     <div class="text-2xl font-semibold mt-1">
-      {{ (tickets_by_status.get('open', 0) + tickets_by_status.get('awaiting_jmf', 0)) }}
+      {{ (tickets_by_status.get('open', 0) + tickets_by_status.get('awaiting_owner', 0)) }}
     </div>
     <div class="text-xs text-slate-500 mt-1">
       open {{ tickets_by_status.get('open', 0) }} ·
-      awaiting OWNER {{ tickets_by_status.get('awaiting_jmf', 0) }}
+      awaiting OWNER {{ tickets_by_status.get('awaiting_owner', 0) }}
     </div>
   </div>
 

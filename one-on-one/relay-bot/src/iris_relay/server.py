@@ -1,7 +1,7 @@
 """FastAPI server for iris-relay (port 8098).
 
 Endpoints:
-  POST /send-to-jmf       — brain pushes a ticket here; we forward to Telegram.
+  POST /send-to-owner       — brain pushes a ticket here; we forward to Telegram.
   POST /send-to-contact   — explicitly 400, that path is wa-listener's job.
   GET  /health            — liveness + counts.
 """
@@ -20,7 +20,7 @@ from .telegram import TelegramRelay
 log = logging.getLogger("iris_relay.server")
 
 
-class SendToJmfPayload(BaseModel):
+class SendToOwnerPayload(BaseModel):
     ticket_id: int
     thread_id: Optional[int] = None
     kind: str = "otro"
@@ -63,8 +63,8 @@ def create_app(
             "tickets_pending": state.count_pending(),
         }
 
-    @app.post("/send-to-jmf")
-    def send_to_jmf(payload: SendToJmfPayload) -> dict[str, Any]:
+    @app.post("/send-to-owner")
+    def send_to_owner(payload: SendToOwnerPayload) -> dict[str, Any]:
         try:
             result = relay.send_ticket(payload.model_dump())
         except Exception as e:  # noqa: BLE001

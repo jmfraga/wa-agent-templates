@@ -4,9 +4,9 @@
  * TODO(OWNER): decidir whatsapp vs telegram en Sprint 0 finalize.
  *
  * Expone HTTP interno en RELAY_BOT_PORT (default 8098):
- *   POST /send-to-jmf  → manda ticket a OWNER por el canal elegido.
+ *   POST /send-to-owner  → manda ticket a OWNER por el canal elegido.
  *
- * Cuando OWNER responde (WA o Telegram), POSTea a brain /jmf/reply.
+ * Cuando OWNER responde (WA o Telegram), POSTea a brain /owner/reply.
  */
 
 import 'dotenv/config';
@@ -20,7 +20,7 @@ import makeWASocket, {
   type WAMessage,
 } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
-import type { RelaySendRequest, JmfReplyRequest } from './types.js';
+import type { RelaySendRequest, OwnerReplyRequest } from './types.js';
 
 const BRAIN_URL = process.env.BRAIN_URL ?? 'http://localhost:8096';
 const RELAY_CHANNEL = (process.env.RELAY_CHANNEL ?? 'telegram') as 'whatsapp' | 'telegram';
@@ -34,21 +34,21 @@ const log = pino({ level: LOG_LEVEL, name: 'iris-relay-bot' });
 // ----------------------------------------------------------------------------
 
 interface RelayChannel {
-  sendToJmf(req: RelaySendRequest): Promise<void>;
+  sendToOwner(req: RelaySendRequest): Promise<void>;
 }
 
-async function postJmfReplyToBrain(req: JmfReplyRequest): Promise<void> {
+async function postOwnerReplyToBrain(req: OwnerReplyRequest): Promise<void> {
   try {
-    const res = await fetch(`${BRAIN_URL}/jmf/reply`, {
+    const res = await fetch(`${BRAIN_URL}/owner/reply`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(req),
     });
     if (!res.ok) {
-      log.error({ status: res.status, text: await res.text() }, 'brain /jmf/reply non-2xx');
+      log.error({ status: res.status, text: await res.text() }, 'brain /owner/reply non-2xx');
     }
   } catch (err) {
-    log.error({ err }, 'failed POST /jmf/reply');
+    log.error({ err }, 'failed POST /owner/reply');
   }
 }
 
@@ -84,7 +84,7 @@ async function buildTelegramChannel(): Promise<RelayChannel> {
       return;
     }
     const text = msg.text ?? '';
-    await postJmfReplyToBrain({
+    await postOwnerReplyToBrain({
       ticket_id: ticket.ticket_id,
       contact_phone: ticket.contact_phone,
       text,
@@ -92,7 +92,7 @@ async function buildTelegramChannel(): Promise<RelayChannel> {
   });
 
   return {
-    async sendToJmf(req: RelaySendRequest): Promise<void> {
+    async sendToOwner(req: RelaySendRequest): Promise<void> {
       const body = `🎫 Ticket ${req.ticket_id}\n📞 ${req.contact_phone}\n\n${req.summary}\n\n— Mensaje del paciente —\n${req.text}\n\n(Responde a este mensaje para contestarle al paciente.)`;
       const sent = await bot.sendMessage(chatId, body);
       ticketByMsgId.set(sent.message_id, {
@@ -109,11 +109,11 @@ async function buildTelegramChannel(): Promise<RelayChannel> {
 
 async function buildWhatsappChannel(): Promise<RelayChannel> {
   const authDir = process.env.RELAY_AUTH_DIR ?? './auth/relay';
-  const jmfPhoneRaw = process.env.JMF_PHONE;
-  if (!jmfPhoneRaw) {
-    throw new Error('JMF_PHONE requerido para RELAY_CHANNEL=whatsapp');
+  const ownerPhoneRaw = process.env.OWNER_PHONE;
+  if (!ownerPhoneRaw) {
+    throw new Error('OWNER_PHONE requerido para RELAY_CHANNEL=whatsapp');
   }
-  const jmfJid = `${jmfPhoneRaw.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
+  const ownerJid = `${ownerPhoneRaw.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const sock = makeWASocket({
@@ -149,7 +149,7 @@ async function buildWhatsappChannel(): Promise<RelayChannel> {
     if (type !== 'notify') return;
     for (const m of messages as WAMessage[]) {
       if (m.key.fromMe) continue;
-      if (m.key.remoteJid !== jmfJid) continue;
+      if (m.key.remoteJid !== ownerJid) continue;
       const text =
         m.message?.conversation ?? m.message?.extendedTextMessage?.text ?? '';
       if (!text) continue;
@@ -166,7 +166,7 @@ async function buildWhatsappChannel(): Promise<RelayChannel> {
         continue;
       }
       const cleaned = text.replace(/#[A-Za-z0-9_-]+/, '').trim();
-      await postJmfReplyToBrain({
+      await postOwnerReplyToBrain({
         ticket_id,
         contact_phone: ticket.contact_phone,
         text: cleaned,
@@ -175,10 +175,10 @@ async function buildWhatsappChannel(): Promise<RelayChannel> {
   });
 
   return {
-    async sendToJmf(req: RelaySendRequest): Promise<void> {
+    async sendToOwner(req: RelaySendRequest): Promise<void> {
       openTickets.set(req.ticket_id, { contact_phone: req.contact_phone });
       const body = `🎫 #${req.ticket_id}\n📞 ${req.contact_phone}\n\n${req.summary}\n\n— Paciente —\n${req.text}\n\n(Responde mencionando #${req.ticket_id} para contestar.)`;
-      await sock.sendMessage(jmfJid, { text: body });
+      await sock.sendMessage(ownerJid, { text: body });
     },
   };
 }
@@ -209,7 +209,7 @@ async function main(): Promise<void> {
     RELAY_CHANNEL === 'whatsapp' ? await buildWhatsappChannel() : await buildTelegramChannel();
 
   const server = http.createServer(async (req, res) => {
-    if (req.method === 'POST' && req.url === '/send-to-jmf') {
+    if (req.method === 'POST' && req.url === '/send-to-owner') {
       try {
         const body = (await readJsonBody(req)) as RelaySendRequest;
         if (!body?.ticket_id || !body?.contact_phone) {
@@ -217,11 +217,11 @@ async function main(): Promise<void> {
           res.end(JSON.stringify({ error: 'missing fields' }));
           return;
         }
-        await channel.sendToJmf(body);
+        await channel.sendToOwner(body);
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {
-        log.error({ err }, '/send-to-jmf failed');
+        log.error({ err }, '/send-to-owner failed');
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: String(err) }));
       }

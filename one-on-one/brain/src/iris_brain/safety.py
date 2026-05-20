@@ -13,7 +13,7 @@ Funcionamiento:
   3. get_response(match) devuelve el texto que Iris envía al paciente.
   4. handle_message en chat.py corre detect() ANTES de classify_intent.
      Si hay match high → envía template, abre ticket urgente, NO llama LLM.
-     Si hay match medium → envía clarification, abre ticket awaiting_jmf, NO llama LLM.
+     Si hay match medium → envía clarification, abre ticket awaiting_owner, NO llama LLM.
      Si no hay match → flujo normal de intents.
 """
 
@@ -310,7 +310,7 @@ CRISIS_TEMPLATES: dict[str, str] = {
     ),
 }
 
-# Medium signal — pide aclaración antes de escalar pero ya abre ticket awaiting_jmf
+# Medium signal — pide aclaración antes de escalar pero ya abre ticket awaiting_owner
 CLARIFICATION_TEMPLATE = (
     "Lo que me dijiste me llamó la atención y quiero entenderte bien. "
     "¿Es algo que estás sintiendo en serio, o es más una manera de decir "

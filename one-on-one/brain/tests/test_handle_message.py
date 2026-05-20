@@ -17,7 +17,7 @@ def test_saludo_smalltalk_reply_directo(handle, fake_relay):
     assert res["intent"] == "saludo_smalltalk"
     assert res["reply"]
     assert res["ticket_id"] is None
-    assert fake_relay.jmf_calls == []
+    assert fake_relay.owner_calls == []
 
 
 def test_consulta_cita_abre_ticket_y_relay(handle, fake_relay):
@@ -25,8 +25,8 @@ def test_consulta_cita_abre_ticket_y_relay(handle, fake_relay):
     assert res["intent"] == "consulta_cita"
     assert res["ticket_id"] is not None
     assert res["reply"]  # mensaje puente
-    assert len(fake_relay.jmf_calls) == 1
-    call = fake_relay.jmf_calls[0]
+    assert len(fake_relay.owner_calls) == 1
+    call = fake_relay.owner_calls[0]
     assert call["kind"] == "consulta_cita"
     assert call["urgent"] is False
     assert call["contact_phone"]  # phone sanitizado
@@ -45,8 +45,8 @@ def test_urgencia_clinica_dispara_safety_keyword_y_relay_urgente(handle, fake_re
     assert res["model"] == "safety_keyword"  # NO se llamó al LLM
     assert res["ticket_id"] is not None
     assert "911" in res["reply"] or "doctor" in res["reply"].lower()
-    assert len(fake_relay.jmf_calls) == 1
-    call = fake_relay.jmf_calls[0]
+    assert len(fake_relay.owner_calls) == 1
+    call = fake_relay.owner_calls[0]
     assert call["urgent"] is True
     assert call["kind"] == "urgencia"
 
@@ -60,8 +60,8 @@ def test_crisis_medium_dispara_clarification_y_relay_no_urgente(handle, fake_rel
     assert res["safety"]["level"] == "medium"
     assert res["model"] == "safety_keyword"
     assert res["ticket_id"] is not None
-    assert len(fake_relay.jmf_calls) == 1
-    call = fake_relay.jmf_calls[0]
+    assert len(fake_relay.owner_calls) == 1
+    call = fake_relay.owner_calls[0]
     assert call["urgent"] is False
     assert call["kind"] == "posible_urgencia"
 
@@ -71,7 +71,7 @@ def test_safety_suicida_alta_prioridad(handle, fake_relay):
     assert res["safety"]["category"] == "suicida"
     assert res["safety"]["level"] == "high"
     assert "SAPTEL" in res["reply"]
-    assert fake_relay.jmf_calls[0]["urgent"] is True
+    assert fake_relay.owner_calls[0]["urgent"] is True
 
 
 def test_saludo_no_dispara_safety(handle, fake_relay):

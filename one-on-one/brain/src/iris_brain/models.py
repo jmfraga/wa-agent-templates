@@ -52,7 +52,7 @@ class MessageDirection(str, enum.Enum):
 
 class TicketStatus(str, enum.Enum):
     open = "open"
-    awaiting_jmf = "awaiting_jmf"
+    awaiting_owner = "awaiting_owner"
     awaiting_patient = "awaiting_patient"
     closed = "closed"
 
@@ -63,7 +63,7 @@ class ThreadStatus(str, enum.Enum):
 
 
 class KbFactSource(str, enum.Enum):
-    jmf = "jmf"
+    owner = "owner"
     landing = "landing"
 
 
@@ -118,9 +118,9 @@ class Ticket(Base):
     thread_id: Mapped[int] = mapped_column(ForeignKey("threads.id"), index=True)
     kind: Mapped[str] = mapped_column(String(64))  # libre: 'agenda', 'precio', 'urgencia', etc.
     summary: Mapped[str] = mapped_column(Text)
-    draft_for_jmf: Mapped[str | None] = mapped_column(Text)
+    draft_for_owner: Mapped[str | None] = mapped_column(Text)
     status: Mapped[TicketStatus] = _enum_col(TicketStatus, "ticket_status", default=TicketStatus.open)
-    jmf_response: Mapped[str | None] = mapped_column(Text)
+    owner_response: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -135,7 +135,7 @@ class KbFact(Base):
     kb_slug: Mapped[str] = mapped_column(String(64), index=True)
     key: Mapped[str] = mapped_column(String(64))
     value: Mapped[str] = mapped_column(Text)
-    source: Mapped[KbFactSource] = _enum_col(KbFactSource, "kb_fact_source", default=KbFactSource.jmf)
+    source: Mapped[KbFactSource] = _enum_col(KbFactSource, "kb_fact_source", default=KbFactSource.owner)
     ttl_days: Mapped[int | None] = mapped_column(Integer, server_default="90")  # días, None = sin expiración
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_at: Mapped[datetime] = mapped_column(

@@ -45,7 +45,7 @@ def test_health(app_and_relay):
     assert data["tickets_pending"] == 0
 
 
-def test_send_to_jmf_dispatches(app_and_relay):
+def test_send_to_owner_dispatches(app_and_relay):
     app, relay, state = app_and_relay
     payload = {
         "ticket_id": 42,
@@ -58,7 +58,7 @@ def test_send_to_jmf_dispatches(app_and_relay):
         "urgent": False,
     }
     with TestClient(app) as client:
-        r = client.post("/send-to-jmf", json=payload)
+        r = client.post("/send-to-owner", json=payload)
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
@@ -77,8 +77,8 @@ def test_send_to_contact_rejected(app_and_relay):
     assert "wa-listener" in r.json()["detail"]
 
 
-def test_send_to_jmf_validates_payload(app_and_relay):
+def test_send_to_owner_validates_payload(app_and_relay):
     app, _, _ = app_and_relay
     with TestClient(app) as client:
-        r = client.post("/send-to-jmf", json={"summary": "no ticket id"})
+        r = client.post("/send-to-owner", json={"summary": "no ticket id"})
     assert r.status_code == 422

@@ -95,7 +95,7 @@ one-on-one/
 │       └── types.ts
 ├── relay-bot/              Python + python-telegram-bot + FastAPI :8098
 │   └── src/iris_relay/
-│       ├── server.py       /send-to-jmf endpoint
+│       ├── server.py       /send-to-owner endpoint
 │       ├── telegram.py     bot handlers (botones inline, /tickets, /help, libre)
 │       ├── templates.py    renderizado de mensajes
 │       ├── state.py        persistencia local de mapping
@@ -121,7 +121,7 @@ one-on-one/
 4. **Slash commands** (opcionales): `/tickets`, `/draft`, etc. desde Telegram via relay-bot.
 5. **Intent classifier**: Haiku 4.5 con prompt cacheado clasifica entre intents (`info_curso`, `consulta_cita`, `seguimiento`, `pago_facturacion`, `saludo_smalltalk`, `otro`, etc.).
 6. **LLM loop**: SOUL + KBs + history del thread. Tool use con varios tools.
-7. **Ticket flow**: si el agente abre ticket, dispara `POST /send-to-jmf` al relay-bot → Telegram al owner. Owner responde → relay-bot hace `POST /owner/reply` → brain redacta versión final → wa-listener entrega al contacto.
+7. **Ticket flow**: si el agente abre ticket, dispara `POST /send-to-owner` al relay-bot → Telegram al owner. Owner responde → relay-bot hace `POST /owner/reply` → brain redacta versión final → wa-listener entrega al contacto.
 
 ## Tools disponibles
 
@@ -129,7 +129,7 @@ one-on-one/
 - `list_kb_facts(kb_slug?)` — lista keys disponibles.
 - `lookup_contact(phone)` — ficha del contacto.
 - `update_contact(phone, name?, kind?, notes_append?, notes_replace?)` — guarda lo aprendido.
-- `open_ticket(thread_id, kind, summary, draft_for_jmf?)` — escala al owner.
+- `open_ticket(thread_id, kind, summary, draft_for_owner?)` — escala al owner.
 - `search_contacts(query, kind?, limit?)` — fuzzy search del directorio.
 - `create_task(owner_id, kind, summary, target_contact_ids, expected_names, ...)` — plan agéntico.
 - `send_outbound(task_id, target_id, body)` — envía después de confirmación.

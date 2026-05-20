@@ -278,7 +278,7 @@ async def admin_tickets(request: Request, since: str | None = None) -> HTMLRespo
     data = await brain_client.admin_tickets_live(since=since)
     if (resp := _unauthorized(request, data)) is not None:
         return resp
-    statuses = ["open", "awaiting_jmf", "awaiting_patient", "closed"]
+    statuses = ["open", "awaiting_owner", "awaiting_patient", "closed"]
     groups = data.get("groups") or {}
     columns = {s: groups.get(s, []) for s in statuses}
     counts = data.get("counts") or {s: len(columns[s]) for s in statuses}

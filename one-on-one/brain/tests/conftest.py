@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 # Configurar env vars ANTES de importar iris_brain.
 os.environ.setdefault("IRIS_BRAIN_DB_URL", "sqlite:///:memory:")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key-dummy")
-os.environ.setdefault("JMF_RELAY_WEBHOOK", "http://test-jmf-relay.local/send-to-jmf")
+os.environ.setdefault("OWNER_RELAY_WEBHOOK", "http://test-owner-relay.local/send-to-owner")
 os.environ.setdefault("CONTACT_RELAY_WEBHOOK", "http://test-contact-relay.local/send-to-contact")
 
 import pytest
@@ -171,11 +171,11 @@ def fake_anthropic(monkeypatch) -> FakeAnthropicClient:
 
 class FakeRelay:
     def __init__(self) -> None:
-        self.jmf_calls: list[dict[str, Any]] = []
+        self.owner_calls: list[dict[str, Any]] = []
         self.contact_calls: list[dict[str, Any]] = []
 
-    def send_to_jmf(self, ticket: dict[str, Any]) -> dict[str, Any]:
-        self.jmf_calls.append(ticket)
+    def send_to_owner(self, ticket: dict[str, Any]) -> dict[str, Any]:
+        self.owner_calls.append(ticket)
         return {"ok": True, "status": 200}
 
     def send_to_contact(self, thread_id: int, body: str) -> dict[str, Any]:

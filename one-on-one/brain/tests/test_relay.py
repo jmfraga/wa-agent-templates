@@ -17,21 +17,21 @@ def mock_httpx_client():
     return c
 
 
-def test_send_to_jmf_usa_jmf_webhook(mock_httpx_client):
+def test_send_to_owner_usa_owner_webhook(mock_httpx_client):
     from iris_brain.relay import Relay
 
     r = Relay(
-        jmf_webhook_url="http://jmf.local/send-to-jmf",
+        owner_webhook_url="http://owner.local/send-to-owner",
         contact_webhook_url="http://contact.local/send-to-contact",
         client=mock_httpx_client,
     )
-    out = r.send_to_jmf(
+    out = r.send_to_owner(
         {
             "id": 1,
             "thread_id": 2,
             "kind": "consulta_cita",
             "summary": "test",
-            "draft_for_jmf": None,
+            "draft_for_owner": None,
             "urgent": False,
             "contact_phone": "5215512345678",
             "contact_name": "Juan",
@@ -40,11 +40,11 @@ def test_send_to_jmf_usa_jmf_webhook(mock_httpx_client):
     assert out["ok"] is True
     mock_httpx_client.post.assert_called_once()
     args, kwargs = mock_httpx_client.post.call_args
-    assert args[0] == "http://jmf.local/send-to-jmf"
+    assert args[0] == "http://owner.local/send-to-owner"
     payload = kwargs["json"]
     assert payload["contact_phone"] == "5215512345678"
     assert payload["contact_name"] == "Juan"
-    assert payload["type"] == "ticket_to_jmf"
+    assert payload["type"] == "ticket_to_owner"
 
 
 def test_send_to_contact_resuelve_phone_y_usa_contact_webhook(mock_httpx_client):
@@ -56,7 +56,7 @@ def test_send_to_contact_resuelve_phone_y_usa_contact_webhook(mock_httpx_client)
     thread_id = sessions.open_or_get_thread(contact_id)
 
     r = Relay(
-        jmf_webhook_url="http://jmf.local/send-to-jmf",
+        owner_webhook_url="http://owner.local/send-to-owner",
         contact_webhook_url="http://contact.local/send-to-contact",
         client=mock_httpx_client,
     )
@@ -74,7 +74,7 @@ def test_send_to_contact_thread_inexistente(mock_httpx_client):
     from iris_brain.relay import Relay
 
     r = Relay(
-        jmf_webhook_url="http://jmf.local",
+        owner_webhook_url="http://owner.local",
         contact_webhook_url="http://contact.local",
         client=mock_httpx_client,
     )
@@ -84,18 +84,18 @@ def test_send_to_contact_thread_inexistente(mock_httpx_client):
     mock_httpx_client.post.assert_not_called()
 
 
-def test_send_to_jmf_sin_webhook_noop(mock_httpx_client, monkeypatch):
+def test_send_to_owner_sin_webhook_noop(mock_httpx_client, monkeypatch):
     from iris_brain import relay as relay_mod
     from iris_brain.relay import Relay
 
-    monkeypatch.setattr(relay_mod.settings, "JMF_RELAY_WEBHOOK", None)
+    monkeypatch.setattr(relay_mod.settings, "OWNER_RELAY_WEBHOOK", None)
     monkeypatch.setattr(relay_mod.settings, "CONTACT_RELAY_WEBHOOK", None)
     r = Relay(
-        jmf_webhook_url=None,
+        owner_webhook_url=None,
         contact_webhook_url=None,
         client=mock_httpx_client,
     )
-    out = r.send_to_jmf({"id": 1, "thread_id": 1, "kind": "x", "summary": "y"})
+    out = r.send_to_owner({"id": 1, "thread_id": 1, "kind": "x", "summary": "y"})
     assert out["ok"] is False
     assert out["noop"] is True
     mock_httpx_client.post.assert_not_called()
@@ -110,7 +110,7 @@ def test_send_to_contact_sin_webhook_noop(mock_httpx_client, monkeypatch):
     cid = sessions.upsert_contact("+5215577776666")
     tid = sessions.open_or_get_thread(cid)
     r = Relay(
-        jmf_webhook_url="http://jmf.local",
+        owner_webhook_url="http://owner.local",
         contact_webhook_url=None,
         client=mock_httpx_client,
     )
@@ -120,17 +120,17 @@ def test_send_to_contact_sin_webhook_noop(mock_httpx_client, monkeypatch):
     mock_httpx_client.post.assert_not_called()
 
 
-def test_send_to_jmf_http_error_se_captura(mock_httpx_client):
+def test_send_to_owner_http_error_se_captura(mock_httpx_client):
     from iris_brain.relay import Relay
 
     mock_httpx_client.post.return_value.raise_for_status = MagicMock(
         side_effect=httpx.HTTPError("boom")
     )
     r = Relay(
-        jmf_webhook_url="http://jmf.local",
+        owner_webhook_url="http://owner.local",
         contact_webhook_url="http://contact.local",
         client=mock_httpx_client,
     )
-    out = r.send_to_jmf({"id": 1, "thread_id": 1, "kind": "x", "summary": "y"})
+    out = r.send_to_owner({"id": 1, "thread_id": 1, "kind": "x", "summary": "y"})
     assert out["ok"] is False
     assert "boom" in out["error"]
