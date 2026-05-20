@@ -12,7 +12,7 @@ from .gating import GatingDecision, decide
 from .models import Contact, Group
 from . import app_config, audit, proactive, safety
 from .discussions import maybe_handle_owner_command
-from .sessions import history_for_group, record_inbound, record_outbound
+from .sessions import history_for_contact, history_for_group, record_inbound, record_outbound
 from .soul import default_soul, load_group_soul
 from .tools import TOOL_DEFINITIONS, ToolContext, dispatch, subscribed_kbs_summary
 
@@ -162,6 +162,7 @@ def handle_chat(req: ChatRequest) -> ChatResponse:
         if cmd_result is not None:
             record_outbound(
                 group_id=None,
+                contact_jid=req.contact_jid,
                 text=cmd_result.reply,
                 model_used="(slash-command)",
                 tokens_in=0,
@@ -212,7 +213,12 @@ def handle_chat(req: ChatRequest) -> ChatResponse:
             return ChatResponse(reply=None, model=None, usage={}, gating=silent, tool_calls=[])
 
     soul_text = (load_group_soul(req.group_jid) if req.group_jid else None) or default_soul()
-    history: list[dict] = history_for_group(group.id) if group else []
+    if group:
+        history: list[dict] = history_for_group(group.id)
+    elif req.contact_jid:
+        history = history_for_contact(req.contact_jid)
+    else:
+        history = []
 
     client = anthropic_client.get_client()
     model = anthropic_client.model_default()
@@ -328,6 +334,7 @@ def handle_chat(req: ChatRequest) -> ChatResponse:
     if reply_text:
         record_outbound(
             group_id=group.id if group else None,
+            contact_jid=req.contact_jid if group is None else None,
             text=reply_text,
             model_used=model,
             tokens_in=usage_acc["input_tokens"],
