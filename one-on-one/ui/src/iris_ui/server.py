@@ -88,6 +88,48 @@ async def directory(
     )
 
 
+@app.post("/contact/new", response_class=HTMLResponse)
+async def contact_new(
+    request: Request,
+    phone: str = Form(...),
+    name: str = Form(""),
+    kind: str = Form("otro"),
+    notes: str = Form(""),
+) -> HTMLResponse:
+    import httpx
+    payload = {"phone": phone, "name": name or None, "kind": kind, "notes": notes or None}
+    async with httpx.AsyncClient(timeout=10) as c:
+        try:
+            r = await c.post(f"{settings.BRAIN_URL}/contacts", json=payload)
+            r.raise_for_status()
+            data = r.json()
+        except httpx.HTTPError as e:
+            return HTMLResponse(f'<span class="text-rose-600">✗ {e}</span>')
+    return HTMLResponse(
+        f'<span class="text-emerald-600">✓ {data.get("name") or data.get("phone")} guardado — '
+        f'<a href="/contact/{data["phone"]}" class="underline">abrir ficha</a></span>'
+    )
+
+
+@app.post("/contact/{phone}/send-direct", response_class=HTMLResponse)
+async def contact_send_direct(
+    request: Request,
+    phone: str,
+    body: str = Form(...),
+) -> HTMLResponse:
+    import httpx
+    async with httpx.AsyncClient(timeout=15) as c:
+        try:
+            r = await c.post(f"{settings.BRAIN_URL}/contacts/{phone}/send-direct", json={"body": body})
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            return HTMLResponse(f'<span class="text-rose-600">✗ {e}</span>')
+    return HTMLResponse(
+        '<span class="text-emerald-600">✓ Mensaje enviado manualmente — '
+        f'<a href="/contact/{phone}" class="underline">refrescar para ver en thread</a></span>'
+    )
+
+
 @app.delete("/contact/{phone}", response_class=HTMLResponse)
 async def contact_delete(request: Request, phone: str) -> HTMLResponse:
     from fastapi.responses import HTMLResponse

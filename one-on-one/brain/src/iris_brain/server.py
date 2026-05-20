@@ -482,6 +482,133 @@ def list_contacts(
         return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
+class ContactCreate(BaseModel):
+    phone: str
+    name: str | None = None
+    kind: str = "otro"
+    notes: str | None = None
+
+
+@app.post("/contacts")
+def create_contact(req: ContactCreate) -> dict[str, Any]:
+    """Crea contacto manualmente desde UI. Upsert si phone ya existe."""
+    from .models import ContactKind
+
+    p = sessions.sanitize_phone(req.phone)
+    if not p:
+        raise HTTPException(400, "phone vacío o inválido")
+    try:
+        k = ContactKind(req.kind)
+    except ValueError:
+        raise HTTPException(400, f"kind inválido: {req.kind}")
+    with get_session() as s:
+        c = s.scalar(select(Contact).where(Contact.phone == p))
+        if c is None:
+            c = Contact(phone=p, name=req.name, kind=k, notes=req.notes)
+            s.add(c)
+        else:
+            if req.name and not c.name:
+                c.name = req.name
+            if k != ContactKind.otro and c.kind == ContactKind.otro:
+                c.kind = k
+            if req.notes:
+                c.notes = f"{c.notes}\n{req.notes}" if c.notes else req.notes
+        s.flush()
+        return {
+            "ok": True,
+            "id": c.id,
+            "phone": c.phone,
+            "name": c.name,
+            "kind": c.kind.value,
+            "notes": c.notes,
+        }
+
+
+class ContactSendDirect(BaseModel):
+    body: str
+
+
+@app.post("/contacts/{phone}/send-direct")
+def send_direct_to_contact(phone: str, req: ContactSendDirect) -> dict[str, Any]:
+    """Manual override — owner manda mensaje directo a un contacto via Iris's WhatsApp,
+    sin pasar por el flujo agéntico. Persiste el mensaje en messages con model_used='manual_override'.
+    """
+    from .models import Thread
+
+    if not req.body or not req.body.strip():
+        raise HTTPException(400, "body vacío")
+    body = req.body.strip()
+    p = sessions.sanitize_phone(phone)
+    with get_session() as s:
+        c = s.scalar(select(Contact).where(Contact.phone == p))
+        if c is None:
+            raise HTTPException(404, "contact no existe")
+        thread = s.scalar(
+            select(Thread).where(Thread.contact_id == c.id).order_by(Thread.opened_at.desc()).limit(1)
+        )
+        if thread is None:
+            thread = Thread(contact_id=c.id, channel="whatsapp")
+            s.add(thread)
+            s.flush()
+        thread_id = thread.id
+        contact_phone = c.phone
+
+    # Send via wa-listener
+    import httpx
+    wa_url = settings.CONTACT_RELAY_WEBHOOK or "http://localhost:8099/send-to-contact"
+    try:
+        with httpx.Client(timeout=10) as client:
+            r = client.post(wa_url, json={
+                "type": "manual_override",
+                "phone": contact_phone,
+                "body": body,
+                "thread_id": thread_id,
+            })
+            r.raise_for_status()
+            wa_resp = r.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"wa-listener falló: {e}")
+    if not wa_resp.get("ok"):
+        raise HTTPException(502, wa_resp.get("error", "wa_listener_fail"))
+
+    # Persist message
+    sessions.append_message(thread_id, MessageDirection.out, body, model_used="manual_override")
+    return {"ok": True, "message_id": wa_resp.get("message_id"), "thread_id": thread_id}
+
+
+class TicketUpdate(BaseModel):
+    kind: str | None = None
+    summary: str | None = None
+    draft_for_owner: str | None = None
+
+
+@app.put("/tickets/{ticket_id}")
+def update_ticket(ticket_id: int, req: TicketUpdate) -> dict[str, Any]:
+    """Edita kind/summary/draft del ticket."""
+    with get_session() as s:
+        t = s.get(Ticket, ticket_id)
+        if t is None:
+            raise HTTPException(404, "ticket no existe")
+        if req.kind is not None:
+            t.kind = req.kind
+        if req.summary is not None:
+            t.summary = req.summary
+        if req.draft_for_owner is not None:
+            t.draft_for_owner = req.draft_for_owner  # column name is draft_for_owner in private (historical)
+        return {"ok": True, "ticket_id": ticket_id}
+
+
+@app.delete("/tickets/{ticket_id}")
+def delete_ticket(ticket_id: int) -> dict[str, Any]:
+    """Borra el ticket permanentemente."""
+    from sqlalchemy import text as sa_text
+    with get_session() as s:
+        r = s.execute(sa_text("DELETE FROM tickets WHERE id = :id"), {"id": ticket_id})
+        if r.rowcount == 0:
+            raise HTTPException(404, "ticket no existe")
+        return {"ok": True, "deleted": r.rowcount}
+
+
 class ContactUpdate(BaseModel):
     name: str | None = None
     kind: str | None = None
