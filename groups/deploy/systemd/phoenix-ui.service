@@ -1,0 +1,18 @@
+[Unit]
+Description=Phoenix v2 admin UI
+After=network-online.target phoenix-brain.service
+Wants=phoenix-brain.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/phoenix/ui
+EnvironmentFile=%h/phoenix/.env
+EnvironmentFile=%h/phoenix/ui/.env
+ExecStart=%h/.local/bin/uv run uvicorn phoenix_ui.server:app --host 0.0.0.0 --port 8101
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/phoenix/logs/ui.log
+StandardError=append:%h/phoenix/logs/ui.err
+
+[Install]
+WantedBy=default.target
