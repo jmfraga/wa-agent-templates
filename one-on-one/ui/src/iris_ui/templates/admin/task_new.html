@@ -1,0 +1,114 @@
+{% extends "admin/_layout.html" %}
+{% block admin_title %}Nueva tarea agéntica{% endblock %}
+{% block admin_content %}
+<section class="space-y-4 max-w-4xl">
+  <header>
+    <h1 class="text-xl font-semibold text-slate-900">Nueva tarea agéntica</h1>
+    <p class="text-sm text-slate-500">Iris envía mensajes a los contactos que elijas y rastrea sus respuestas.</p>
+  </header>
+
+  <form hx-post="/admin/tasks/new/preview" hx-target="#task-preview" hx-swap="innerHTML" class="bg-white border border-slate-200 rounded-lg shadow-sm p-4 space-y-4">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div>
+        <label class="block text-xs text-slate-500 mb-1">Tipo</label>
+        <select name="kind" class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white">
+          <option value="invitar">📨 Invitar</option>
+          <option value="coordinar_cita">📅 Coordinar cita</option>
+          <option value="recordatorio">⏰ Recordatorio</option>
+          <option value="enviar_info">📩 Enviar info</option>
+          <option value="otro">🔧 Otro</option>
+        </select>
+      </div>
+      <div class="md:col-span-2">
+        <label class="block text-xs text-slate-500 mb-1">Resumen (para tu referencia)</label>
+        <input name="summary" required placeholder="Ej: Recordar a 5 colegas la junta del lunes 4pm"
+               class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
+      </div>
+    </div>
+
+    <div>
+      <label class="block text-xs text-slate-500 mb-1">Destinatarios</label>
+      <div class="relative">
+        <input name="search" placeholder="Busca por nombre, teléfono o notas…"
+               hx-get="/admin/contacts/search"
+               hx-trigger="keyup changed delay:250ms"
+               hx-target="#contact-search-results"
+               hx-include="[name='search']"
+               class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
+        <div id="contact-search-results" class="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-64 overflow-y-auto hidden"></div>
+      </div>
+      <div id="selected-targets" class="mt-2 flex flex-wrap gap-2 min-h-[2.5rem] p-2 bg-slate-50 border border-dashed border-slate-300 rounded-md">
+        <span class="text-xs text-slate-400 self-center" id="empty-targets-hint">Aún no eliges destinatarios. Busca arriba y haz click para agregar.</span>
+      </div>
+    </div>
+
+    <div>
+      <label class="block text-xs text-slate-500 mb-1">
+        Mensaje a enviar
+        <span class="text-slate-400">— usa <code class="bg-slate-100 px-1 rounded">{{ '{' }}{{ '{' }}name{{ '}' }}{{ '}' }}</code> o <code class="bg-slate-100 px-1 rounded">{{ '{' }}{{ '{' }}first_name{{ '}' }}{{ '}' }}</code> para personalizar por destinatario</span>
+      </label>
+      <textarea name="message_template" required rows="4"
+                placeholder="Hola {{ '{' }}{{ '{' }}first_name{{ '}' }}{{ '}' }}, te recuerdo nuestra junta del lunes a las 4pm. ¿Confirmas?"
+                class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono"></textarea>
+    </div>
+
+    <div class="flex items-center justify-between pt-2 border-t border-slate-200">
+      <a href="/admin/tasks" class="text-sm text-slate-500 hover:text-slate-700">← Volver a tareas</a>
+      <button type="submit" class="bg-slate-900 text-white text-sm rounded-md px-4 py-2 hover:bg-slate-800">
+        🔍 Construir plan (sin enviar)
+      </button>
+    </div>
+  </form>
+
+  <div id="task-preview"></div>
+</section>
+
+<script>
+  // Auto-mostrar dropdown de resultados, ocultar al perder foco
+  document.body.addEventListener('htmx:afterSwap', (e) => {
+    if (e.detail.target.id === 'contact-search-results') {
+      const r = document.getElementById('contact-search-results');
+      const hasItems = r && r.children.length > 0;
+      r.classList.toggle('hidden', !hasItems);
+    }
+  });
+  document.addEventListener('click', (e) => {
+    const r = document.getElementById('contact-search-results');
+    if (!r) return;
+    if (!e.target.closest('#contact-search-results') && !e.target.closest('input[name="search"]')) {
+      r.classList.add('hidden');
+    }
+  });
+
+  // Agregar/quitar destinatario chips (delegación en body para HTMX)
+  function syncEmptyHint() {
+    const wrap = document.getElementById('selected-targets');
+    const hint = document.getElementById('empty-targets-hint');
+    const chips = wrap.querySelectorAll('[data-target-id]');
+    if (hint) hint.style.display = chips.length === 0 ? '' : 'none';
+  }
+  document.body.addEventListener('click', (e) => {
+    const add = e.target.closest('[data-add-target]');
+    if (add) {
+      const cid = add.dataset.contactId;
+      const name = add.dataset.contactName;
+      const phone = add.dataset.contactPhone;
+      const wrap = document.getElementById('selected-targets');
+      if (wrap.querySelector(`[data-target-id="${cid}"]`)) return; // already selected
+      const chip = document.createElement('div');
+      chip.dataset.targetId = cid;
+      chip.className = 'inline-flex items-center gap-2 bg-sky-50 text-sky-800 border border-sky-200 rounded-full px-3 py-1 text-xs';
+      chip.innerHTML = `
+        <span>${name}</span>
+        <input type="hidden" name="target_contact_ids" value="${cid}" />
+        <input type="hidden" name="expected_names" value="${name}" />
+        <button type="button" class="text-sky-500 hover:text-sky-700" onclick="this.parentElement.remove(); syncEmptyHint()">×</button>
+      `;
+      wrap.appendChild(chip);
+      syncEmptyHint();
+      document.querySelector('input[name="search"]').value = '';
+      document.getElementById('contact-search-results').classList.add('hidden');
+    }
+  });
+</script>
+{% endblock %}
