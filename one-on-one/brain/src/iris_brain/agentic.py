@@ -382,6 +382,63 @@ def report_to_owner(text: str, task_id: int | None = None) -> dict[str, Any]:
 
 # --- Response tracking (called from chat.handle_message) --------------------
 
+def render_message_template(template: str, contact_name: str | None, contact_phone: str) -> str:
+    """Sustituye placeholders {{name}}, {{phone}}, {{first_name}} en el template.
+
+    Si name es None usa 'amigo'/'amiga' genérico. first_name = primer token de name.
+    """
+    name = contact_name or "amigo"
+    first = name.split()[0] if name else "amigo"
+    return (
+        template
+        .replace("{{name}}", name)
+        .replace("{{first_name}}", first)
+        .replace("{{phone}}", contact_phone)
+    )
+
+
+def send_all_pending(task_id: int, message_template: str) -> dict[str, Any]:
+    """Envía a TODOS los targets de la task que estén en status='pending'.
+
+    Aplica render_message_template por cada target. Devuelve summary con ok/fail por target.
+    """
+    with get_session() as s:
+        targets = list(
+            s.scalars(
+                select(TaskTarget).where(TaskTarget.task_id == task_id, TaskTarget.status == "pending")
+            )
+        )
+        target_specs: list[dict] = []
+        for tt in targets:
+            c = s.get(Contact, tt.contact_id)
+            target_specs.append({
+                "target_id": tt.id,
+                "contact_id": tt.contact_id,
+                "contact_name": c.name if c else None,
+                "contact_phone": c.phone if c else "",
+            })
+
+    results = []
+    for spec in target_specs:
+        body = render_message_template(message_template, spec["contact_name"], spec["contact_phone"])
+        r = send_outbound(task_id, spec["target_id"], body)
+        results.append({
+            "target_id": spec["target_id"],
+            "contact_name": spec["contact_name"],
+            "ok": r.get("ok", False),
+            "error": r.get("error"),
+            "body": body if r.get("ok") else None,
+        })
+    sent_count = sum(1 for r in results if r["ok"])
+    failed_count = len(results) - sent_count
+    return {
+        "ok": failed_count == 0,
+        "sent": sent_count,
+        "failed": failed_count,
+        "results": results,
+    }
+
+
 def classify_response(message_sent: str, response_text: str, anthropic_client=None) -> dict[str, Any]:
     """Clasifica la respuesta de un target a un outbound de Iris.
 

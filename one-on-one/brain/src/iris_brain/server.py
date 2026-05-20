@@ -69,7 +69,7 @@ class KbFactUpsert(BaseModel):
     kb_slug: str
     key: str
     value: str
-    source: KbFactSource = KbFactSource.owner
+    source: KbFactSource = KbFactSource.manual
     ttl_days: int | None = None
 
 
@@ -154,6 +154,77 @@ def list_tasks(status: str | None = None, limit: int = 50) -> dict[str, Any]:
         return {"tasks": out, "count": len(out)}
 
 
+class TaskPreviewRequest(BaseModel):
+    kind: str
+    summary: str
+    raw_instruction: str | None = None
+    target_contact_ids: list[int]
+    expected_names: list[str] | None = None
+    message_template: str
+    context: dict[str, Any] | None = None
+    owner_phone: str | None = None
+
+
+@app.post("/tasks/preview")
+def preview_task(req: TaskPreviewRequest) -> dict[str, Any]:
+    """Crea task agéntica en 'pending' y devuelve preview personalizado por target.
+
+    NO envía. UI/Telegram presentan preview a owner; tras confirmar → POST /tasks/{id}/send-all.
+    """
+    from . import agentic
+    from .models import ContactKind
+
+    with get_session() as s:
+        if req.owner_phone:
+            p = sessions.sanitize_phone(req.owner_phone)
+            owner = s.scalar(select(Contact).where(Contact.phone == p, Contact.kind == ContactKind.owner))
+        else:
+            owner = s.scalar(select(Contact).where(Contact.kind == ContactKind.owner).limit(1))
+        if owner is None:
+            raise HTTPException(404, "no hay contacto kind='owner'")
+        owner_id = owner.id
+
+    r = agentic.create_task(
+        owner_id=owner_id,
+        kind=req.kind,
+        summary=req.summary,
+        raw_instruction=req.raw_instruction,
+        target_contact_ids=req.target_contact_ids,
+        context=req.context,
+        expected_names=req.expected_names,
+    )
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("error", "create_task failed"))
+
+    previews = []
+    for tg in r["targets"]:
+        body = agentic.render_message_template(
+            req.message_template,
+            tg.get("contact_name"),
+            tg.get("contact_phone") or "",
+        )
+        previews.append({**tg, "preview_body": body})
+    return {
+        "ok": True,
+        "task_id": r["task_id"],
+        "targets": previews,
+        "message_template": req.message_template,
+        "auto_corrections": r.get("auto_corrections", []),
+        "warning": r.get("warning"),
+    }
+
+
+class TaskSendAllRequest(BaseModel):
+    message_template: str
+
+
+@app.post("/tasks/{task_id}/send-all")
+def send_all_task(task_id: int, req: TaskSendAllRequest) -> dict[str, Any]:
+    """Envía a todos los targets pending con el message_template dado."""
+    from . import agentic
+    return agentic.send_all_pending(task_id, req.message_template)
+
+
 @app.post("/tasks/{task_id}/cancel")
 def cancel_task(task_id: int) -> dict[str, Any]:
     from .models import Task, TaskTarget
@@ -180,10 +251,10 @@ class OwnerInstructRequest(BaseModel):
 
 @app.post("/owner/instruct")
 def owner_instruct(req: OwnerInstructRequest) -> dict[str, Any]:
-    """OWNER dicta una instrucción agéntica desde Telegram. Iris la procesa con tools agentic."""
+    """owner dicta una instrucción agéntica desde Telegram. Iris la procesa con tools agentic."""
     from .models import ContactKind
 
-    # Resolver el owner (OWNER). Si no se pasa owner_phone, buscamos el primer contacto kind=owner.
+    # Resolver el owner (owner). Si no se pasa owner_phone, buscamos el primer contacto kind=owner.
     with get_session() as s:
         if req.owner_phone:
             p = sessions.sanitize_phone(req.owner_phone)
@@ -209,7 +280,7 @@ def owner_instruct(req: OwnerInstructRequest) -> dict[str, Any]:
 
 @app.post("/owner/reply")
 def owner_reply(req: OwnerReplyRequest) -> dict[str, Any]:
-    """OWNER responde a un ticket; mandamos la respuesta al contacto vía relay."""
+    """owner responde a un ticket; mandamos la respuesta al contacto vía relay."""
     with get_session() as s:
         t = s.get(Ticket, req.ticket_id)
         if t is None:

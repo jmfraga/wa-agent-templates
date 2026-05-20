@@ -22,7 +22,7 @@ from .config import settings
 
 # Valid intents available for ticket reassignment. Mirrors the brain's
 # intent enum; keep in sync if the brain adds new ones.
-# TODO(OWNER): centralize this list — duplicated with brain/intents.py.
+# TODO(owner): centralize this list — duplicated with brain/intents.py.
 VALID_KINDS = [
     "saludo_smalltalk",
     "consulta_cita",
@@ -437,6 +437,99 @@ async def admin_tasks(request: Request, status: str | None = None) -> HTMLRespon
     })
 
 
+@router.get("/tasks/new", response_class=HTMLResponse)
+async def admin_task_new(request: Request) -> HTMLResponse:
+    return _render(request, "admin/task_new.html", {"active": "task_new"})
+
+
+@router.get("/contacts/search", response_class=HTMLResponse)
+async def admin_contact_search(request: Request, search: str = "") -> HTMLResponse:
+    """HTMX autocomplete: devuelve fragmento con botones para agregar contactos."""
+    q = (search or "").strip()
+    if len(q) < 2:
+        return templates.TemplateResponse(
+            request,
+            "admin/_partials/contact_search.html",
+            {"request": request, "items": []},
+        )
+    data = await brain_client.list_contacts(q=q, page=1, page_size=10, sort="recent")
+    return templates.TemplateResponse(
+        request,
+        "admin/_partials/contact_search.html",
+        {"request": request, "items": data.get("items", [])[:10]},
+    )
+
+
+@router.post("/tasks/new/preview", response_class=HTMLResponse)
+async def admin_task_preview(
+    request: Request,
+    kind: str = Form(...),
+    summary: str = Form(...),
+    message_template: str = Form(...),
+    target_contact_ids: list[int] = Form(...),
+    expected_names: list[str] = Form(...),
+) -> HTMLResponse:
+    import httpx
+    payload = {
+        "kind": kind,
+        "summary": summary,
+        "raw_instruction": f"[UI admin] {summary}",
+        "target_contact_ids": target_contact_ids,
+        "expected_names": expected_names,
+        "message_template": message_template,
+    }
+    async with httpx.AsyncClient(timeout=15) as c:
+        try:
+            r = await c.post(f"{settings.BRAIN_URL}/tasks/preview", json=payload)
+            r.raise_for_status()
+            data = r.json()
+        except httpx.HTTPError as e:
+            err = str(e)
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    err = e.response.json().get("detail", err)
+                except Exception:
+                    pass
+            return templates.TemplateResponse(
+                request,
+                "admin/_partials/task_preview.html",
+                {"request": request, "error": err},
+            )
+    return templates.TemplateResponse(
+        request,
+        "admin/_partials/task_preview.html",
+        {"request": request, "preview": data},
+    )
+
+
+@router.post("/tasks/{task_id}/confirm-send", response_class=HTMLResponse)
+async def admin_task_send(
+    request: Request,
+    task_id: int,
+    message_template: str = Form(...),
+) -> HTMLResponse:
+    import httpx
+    async with httpx.AsyncClient(timeout=30) as c:
+        try:
+            r = await c.post(
+                f"{settings.BRAIN_URL}/tasks/{task_id}/send-all",
+                json={"message_template": message_template},
+            )
+            r.raise_for_status()
+            data = r.json()
+        except httpx.HTTPError as e:
+            return templates.TemplateResponse(
+                request,
+                "admin/_partials/task_preview.html",
+                {"request": request, "error": str(e)},
+            )
+    return templates.TemplateResponse(
+        request,
+        "admin/_partials/task_preview.html",
+        {"request": request, "result": data},
+    )
+
+
 @router.post("/tasks/{task_id}/cancel", response_class=HTMLResponse)
 async def admin_cancel_task(request: Request, task_id: int) -> HTMLResponse:
     import httpx
@@ -501,7 +594,7 @@ async def admin_whatsapp_status(request: Request) -> HTMLResponse:
 
 @router.post("/health/probe/{name}", response_class=HTMLResponse)
 async def admin_health_probe(request: Request, name: str) -> HTMLResponse:
-    # TODO(OWNER): the brain currently has no manual-probe endpoint; this
+    # TODO(owner): the brain currently has no manual-probe endpoint; this
     # just re-fetches the components list. Wire a dedicated probe route
     # under /admin/health/probe/{name} when available.
     data = await brain_client.admin_health_components()
