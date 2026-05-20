@@ -9,10 +9,15 @@ ctx incluye group_id (puede ser None en DM owner) y un flag is_owner.
 Tools que mutan estado (update_my_soul, create_kb, subscribe_kb, etc.) son
 owner-only: si el solicitante no es owner, devuelven {ok:false, reason:owner_only}.
 """
+import ipaddress
+import socket
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Optional
+from urllib.parse import urlparse
 
+import httpx
 from sqlalchemy import select
 
 from .db import get_session
@@ -410,11 +415,152 @@ def _handle_rename_group(args: dict, ctx: ToolContext) -> dict:
     return {"ok": True, "display_name": name, "group_id": group_id}
 
 
+# ── Tool: fetch_url (no owner-only) ─────────────────────────────────
+FETCH_URL = {
+    "name": "fetch_url",
+    "description": (
+        "Descarga una URL HTTP(S) pública y devuelve su contenido principal "
+        "como texto plano (HTML convertido a texto, hasta ~12K caracteres). "
+        "Úsalo cuando el usuario te comparta un link y te pida opinar, "
+        "resumir o extraer información. NO bajes URLs proactivamente; sólo "
+        "si te lo piden o si necesitas el contexto para responder algo que "
+        "te preguntaron. No accede a redes privadas (localhost, 10.x, "
+        "192.168.x, 100.64-127.x Tailscale)."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "URL completa con http:// o https://"},
+        },
+        "required": ["url"],
+    },
+}
+
+
+_URL_CACHE: dict[str, tuple[dict, float]] = {}
+_URL_CACHE_TTL = 300  # 5 min
+_USER_AGENT = "Mozilla/5.0 (compatible; PhoenixBot/1.0)"
+_FETCH_TIMEOUT = 10.0
+_TEXT_TRUNCATE = 12000
+_SUPPORTED_CT = ("text/html", "text/plain", "text/markdown", "application/json", "application/xhtml")
+
+
+def _is_private_ip(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True  # ante la duda, bloquear
+    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+        return True
+    if ip.is_private:
+        return True
+    # Tailscale CGNAT: 100.64.0.0/10
+    if isinstance(ip, ipaddress.IPv4Address):
+        if int(ip) >> 22 == (100 << 24 | 64 << 16) >> 22:
+            return True
+        # Más simple y explícito:
+        if 100 <= int(str(ip).split(".")[0]) and str(ip).startswith(("100.64.", "100.65.", "100.66.", "100.67.",
+                                                                     "100.68.", "100.69.", "100.7", "100.8", "100.9",
+                                                                     "100.10", "100.11", "100.12")):
+            # cubre 100.64.x – 100.127.x
+            first_octet = int(str(ip).split(".")[1])
+            if 64 <= first_octet <= 127:
+                return True
+    return False
+
+
+def _strip_html(html: str) -> tuple[str, Optional[str]]:
+    """Quita scripts/styles/nav/footer y devuelve (texto, title)."""
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return html[:_TEXT_TRUNCATE], None
+    soup = BeautifulSoup(html, "html.parser")
+    title = soup.title.string.strip() if soup.title and soup.title.string else None
+    for tag in soup(["script", "style", "nav", "footer", "noscript", "iframe", "svg"]):
+        tag.decompose()
+    # Preferir <main> o <article> si existen
+    main = soup.find("main") or soup.find("article") or soup.body or soup
+    text = main.get_text(separator=" ", strip=True)
+    # Colapsar espacios múltiples
+    import re
+    text = re.sub(r"\s+", " ", text).strip()
+    return text, title
+
+
+def _handle_fetch_url(args: dict, ctx: ToolContext) -> dict:
+    url = (args.get("url") or "").strip()
+    if not url:
+        return {"ok": False, "reason": "empty_url"}
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return {"ok": False, "reason": "unsupported_scheme", "scheme": parsed.scheme}
+    if not parsed.netloc:
+        return {"ok": False, "reason": "missing_host"}
+
+    # SSRF guard: resolver DNS y bloquear privadas
+    host = parsed.hostname or ""
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        return {"ok": False, "reason": "dns_failure", "error": str(e)}
+    for info in infos:
+        ip_str = info[4][0]
+        if _is_private_ip(ip_str):
+            return {"ok": False, "reason": "private_ip_blocked", "host": host, "resolved_ip": ip_str}
+
+    # Cache
+    now = time.time()
+    cached = _URL_CACHE.get(url)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    try:
+        r = httpx.get(
+            url,
+            timeout=_FETCH_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": _USER_AGENT, "Accept": "text/html,application/xhtml+xml,text/plain,*/*;q=0.5"},
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "reason": "fetch_failed", "error": str(e)[:200]}
+
+    ct = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if not any(ct.startswith(s) for s in _SUPPORTED_CT):
+        return {"ok": False, "reason": "unsupported_content_type", "content_type": ct, "status_code": r.status_code}
+
+    body = r.text or ""
+    title = None
+    if ct.startswith(("text/html", "application/xhtml")):
+        text, title = _strip_html(body)
+    else:
+        text = body
+
+    truncated = len(text) > _TEXT_TRUNCATE
+    if truncated:
+        text = text[:_TEXT_TRUNCATE] + " … [truncado]"
+
+    result = {
+        "ok": True,
+        "url": url,
+        "final_url": str(r.url),
+        "title": title,
+        "text": text,
+        "status_code": r.status_code,
+        "truncated": truncated,
+        "content_type": ct,
+    }
+    _URL_CACHE[url] = (result, now + _URL_CACHE_TTL)
+    return result
+
+
 # ── Registry ────────────────────────────────────────────────────────
 TOOL_DEFINITIONS = [
     LOOKUP_KB_FACT,
     LIST_KB_FACTS,
     REMEMBER_FACT,
+    FETCH_URL,
     UPDATE_MY_SOUL,
     CREATE_KB,
     SUBSCRIBE_KB,
@@ -425,6 +571,7 @@ _HANDLERS: dict[str, Callable[[dict, ToolContext], Any]] = {
     "lookup_kb_fact": _handle_lookup_kb_fact,
     "list_kb_facts": _handle_list_kb_facts,
     "remember_fact": _handle_remember_fact,
+    "fetch_url": _handle_fetch_url,
     "update_group_soul": _handle_update_my_soul,
     "create_kb": _handle_create_kb,
     "subscribe_kb_to_group": _handle_subscribe_kb,

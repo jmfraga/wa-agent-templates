@@ -29,6 +29,9 @@ class ChatRequest:
     mentions_phoenix: bool = False
     quoted_msg_id: Optional[str] = None
     quoted_is_phoenix: bool = False
+    # Lista de bloques de media descargados por el listener: image | document (PDF).
+    # Cada item: {kind, mime, b64, filename?}. None si no hay media downloadable.
+    media: Optional[list[dict]] = None
 
 
 @dataclass
@@ -227,12 +230,57 @@ def handle_chat(req: ChatRequest) -> ChatResponse:
             ctx += " Quien te escribe es <OWNER> (el owner)."
         system_blocks.append({"type": "text", "text": ctx})
 
+    author = "<OWNER>" if is_owner else (req.contact_name or req.contact_jid or "alguien")
     if not history:
-        author = "<OWNER>" if is_owner else (req.contact_name or req.contact_jid or "alguien")
         history = [{"role": "user", "content": f"{author}: {req.text}"}]
 
     tool_ctx = ToolContext(group_id=group.id if group else None, is_owner=is_owner)
     messages = list(history)
+
+    # Si hay media descargada por el listener, reemplazamos el último mensaje
+    # user (el current turn) por un content array con bloques image/document
+    # + el texto. Anthropic mezcla los modales en un solo turn.
+    if req.media:
+        user_content: list[dict] = []
+        media_meta_for_audit: list[dict] = []
+        for m_block in req.media:
+            kind = m_block.get("kind")
+            mime = m_block.get("mime") or ""
+            b64 = m_block.get("b64") or ""
+            if not b64 or not mime:
+                continue
+            if kind == "image":
+                user_content.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": mime, "data": b64},
+                })
+            elif kind == "document":
+                user_content.append({
+                    "type": "document",
+                    "source": {"type": "base64", "media_type": mime, "data": b64},
+                })
+            else:
+                continue
+            media_meta_for_audit.append({
+                "kind": kind,
+                "mime": mime,
+                "size_b64": len(b64),
+                "filename": m_block.get("filename"),
+            })
+        # Apéndice de texto. Mantenemos el formato "<author>: <text>" si hay texto.
+        text_for_block = f"{author}: {req.text or ''}".strip().rstrip(":")
+        user_content.append({"type": "text", "text": text_for_block or f"[{author} envió media]"})
+        # Reemplazar el último mensaje user
+        if messages and messages[-1].get("role") == "user":
+            messages[-1] = {"role": "user", "content": user_content}
+        else:
+            messages.append({"role": "user", "content": user_content})
+        if media_meta_for_audit:
+            audit.log(
+                "media_processed",
+                group_jid=req.group_jid,
+                payload={"media": media_meta_for_audit, "contact_jid": req.contact_jid},
+            )
     usage_acc = {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
     tool_calls_log: list[dict] = []
     reply_text = ""
