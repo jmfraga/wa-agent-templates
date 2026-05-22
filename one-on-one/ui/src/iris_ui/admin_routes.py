@@ -22,7 +22,7 @@ from .config import settings
 
 # Valid intents available for ticket reassignment. Mirrors the brain's
 # intent enum; keep in sync if the brain adds new ones.
-# TODO(owner): centralize this list — duplicated with brain/intents.py.
+# TODO(Owner): centralize this list — duplicated with brain/intents.py.
 VALID_KINDS = [
     "saludo_smalltalk",
     "consulta_cita",
@@ -278,7 +278,7 @@ async def admin_tickets(request: Request, since: str | None = None) -> HTMLRespo
     data = await brain_client.admin_tickets_live(since=since)
     if (resp := _unauthorized(request, data)) is not None:
         return resp
-    statuses = ["open", "awaiting_owner", "awaiting_patient", "closed"]
+    statuses = ["open", "awaiting_jmf", "awaiting_patient", "closed"]
     groups = data.get("groups") or {}
     columns = {s: groups.get(s, []) for s in statuses}
     counts = data.get("counts") or {s: len(columns[s]) for s in statuses}
@@ -439,7 +439,52 @@ async def admin_tasks(request: Request, status: str | None = None) -> HTMLRespon
 
 @router.get("/tasks/new", response_class=HTMLResponse)
 async def admin_task_new(request: Request) -> HTMLResponse:
-    return _render(request, "admin/task_new.html", {"active": "task_new"})
+    # Carga lista de media assets para selector (no eliminados, top 100 recientes).
+    import httpx
+    assets: list[dict] = []
+    async with httpx.AsyncClient(timeout=10) as c:
+        try:
+            r = await c.get(f"{settings.BRAIN_URL}/media", params={"limit": 100})
+            r.raise_for_status()
+            assets = r.json().get("items", [])
+        except httpx.HTTPError:
+            assets = []
+    return _render(request, "admin/task_new.html", {"active": "task_new", "assets": assets})
+
+
+@router.post("/tasks/{task_id}/execute", response_class=HTMLResponse)
+async def admin_task_execute(request: Request, task_id: int) -> HTMLResponse:
+    """Botón 'Ejecutar ahora' del detalle de task — proxy a brain."""
+    import httpx
+    from fastapi.responses import HTMLResponse as _HTML
+    async with httpx.AsyncClient(timeout=60) as c:
+        try:
+            r = await c.post(f"{settings.BRAIN_URL}/tasks/{task_id}/execute")
+            r.raise_for_status()
+            data = r.json()
+        except httpx.HTTPError as e:
+            err = str(e)
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    err = e.response.json().get("detail", err)
+                except Exception:
+                    pass
+            return _HTML(f'<div class="p-3 text-rose-700">✗ Error ejecutando task: {err}</div>')
+    sent = data.get("sent", 0)
+    failed = data.get("failed", 0)
+    status = data.get("status", "?")
+    errors = data.get("errors", []) or []
+    color = "emerald" if failed == 0 else ("amber" if sent > 0 else "rose")
+    err_html = ""
+    if errors:
+        err_html = "<ul class='mt-2 text-xs list-disc list-inside'>" + "".join(
+            f"<li>target {e.get('target_id')}: {e.get('error')}</li>" for e in errors[:10]
+        ) + "</ul>"
+    return _HTML(
+        f'<div class="p-3 text-{color}-700 bg-{color}-50 border border-{color}-200 rounded-md">'
+        f'🚀 Task #{task_id} ejecutada — sent={sent} failed={failed} status={status}{err_html} '
+        f'<a href="/admin/tasks" class="underline ml-2">refrescar lista</a></div>'
+    )
 
 
 @router.get("/contacts/search", response_class=HTMLResponse)
@@ -507,19 +552,37 @@ async def admin_task_preview(
     request: Request,
     kind: str = Form(...),
     summary: str = Form(...),
-    message_template: str = Form(...),
+    message_template: str = Form(""),
     target_contact_ids: list[int] = Form(...),
     expected_names: list[str] = Form(...),
+    asset_id: str = Form(""),
+    caption: str = Form(""),
+    scheduled_at: str = Form(""),
 ) -> HTMLResponse:
     import httpx
+    # Si hay asset, el body es el caption; el template puede quedar vacío.
+    effective_template = caption if asset_id else message_template
     payload = {
         "kind": kind,
         "summary": summary,
         "raw_instruction": f"[UI admin] {summary}",
         "target_contact_ids": target_contact_ids,
         "expected_names": expected_names,
-        "message_template": message_template,
+        "message_template": effective_template or "",
     }
+    # Context payload con asset/caption/template y scheduled
+    ctx: dict[str, Any] = {}
+    if asset_id:
+        try:
+            ctx["asset_id"] = int(asset_id)
+        except ValueError:
+            pass
+        if caption:
+            ctx["caption"] = caption
+    if message_template:
+        ctx["message_template"] = message_template
+    if ctx:
+        payload["context"] = ctx
     async with httpx.AsyncClient(timeout=15) as c:
         try:
             r = await c.post(f"{settings.BRAIN_URL}/tasks/preview", json=payload)
@@ -537,6 +600,23 @@ async def admin_task_preview(
                 "admin/_partials/task_preview.html",
                 {"request": request, "error": err},
             )
+        # Si scheduled_at presente o asset_id, persistir extras en la task creada
+        task_id = data.get("task_id")
+        if task_id and (scheduled_at or asset_id):
+            try:
+                patch_payload: dict[str, Any] = {}
+                if scheduled_at:
+                    patch_payload["scheduled_at"] = scheduled_at
+                if asset_id:
+                    patch_payload["asset_id"] = int(asset_id)
+                    patch_payload["caption"] = caption or None
+                await c.post(
+                    f"{settings.BRAIN_URL}/tasks/{task_id}/patch", json=patch_payload
+                )
+            except httpx.HTTPError:
+                pass
+    data["has_asset"] = bool(asset_id)
+    data["scheduled_at"] = scheduled_at or None
     return templates.TemplateResponse(
         request,
         "admin/_partials/task_preview.html",
@@ -548,15 +628,21 @@ async def admin_task_preview(
 async def admin_task_send(
     request: Request,
     task_id: int,
-    message_template: str = Form(...),
+    message_template: str = Form(""),
+    has_asset: str = Form(""),
 ) -> HTMLResponse:
     import httpx
-    async with httpx.AsyncClient(timeout=30) as c:
+    is_asset = has_asset in ("on", "true", "1", "yes")
+    async with httpx.AsyncClient(timeout=60) as c:
         try:
-            r = await c.post(
-                f"{settings.BRAIN_URL}/tasks/{task_id}/send-all",
-                json={"message_template": message_template},
-            )
+            if is_asset:
+                # Usar el executor (consulta context.asset_id + caption)
+                r = await c.post(f"{settings.BRAIN_URL}/tasks/{task_id}/execute")
+            else:
+                r = await c.post(
+                    f"{settings.BRAIN_URL}/tasks/{task_id}/send-all",
+                    json={"message_template": message_template},
+                )
             r.raise_for_status()
             data = r.json()
         except httpx.HTTPError as e:
@@ -565,6 +651,16 @@ async def admin_task_send(
                 "admin/_partials/task_preview.html",
                 {"request": request, "error": str(e)},
             )
+    # Normalizar shape de executor (sent/failed/errors) → results[]
+    if is_asset and "results" not in data:
+        results = []
+        sent = data.get("sent", 0)
+        for i in range(sent):
+            results.append({"ok": True, "contact_name": None})
+        for e in data.get("errors", []) or []:
+            results.append({"ok": False, "contact_name": f"target #{e.get('target_id')}", "error": e.get("error")})
+        data["results"] = results
+        data["ok"] = data.get("failed", 0) == 0
     return templates.TemplateResponse(
         request,
         "admin/_partials/task_preview.html",
@@ -761,7 +857,7 @@ async def admin_whatsapp_status(request: Request) -> HTMLResponse:
 
 @router.post("/health/probe/{name}", response_class=HTMLResponse)
 async def admin_health_probe(request: Request, name: str) -> HTMLResponse:
-    # TODO(owner): the brain currently has no manual-probe endpoint; this
+    # TODO(Owner): the brain currently has no manual-probe endpoint; this
     # just re-fetches the components list. Wire a dedicated probe route
     # under /admin/health/probe/{name} when available.
     data = await brain_client.admin_health_components()

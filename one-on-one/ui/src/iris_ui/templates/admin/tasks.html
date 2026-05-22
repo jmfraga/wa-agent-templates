@@ -42,7 +42,7 @@
     <div class="p-4 border-t border-slate-200 space-y-3">
       {% if t.raw_instruction %}
       <div>
-        <div class="text-xs text-slate-500 mb-1">Instrucción original de OWNER</div>
+        <div class="text-xs text-slate-500 mb-1">Instrucción original de Owner</div>
         <div class="text-sm bg-slate-50 p-2 rounded-md italic">"{{ t.raw_instruction }}"</div>
       </div>
       {% endif %}
@@ -97,8 +97,26 @@
         </table>
       </div>
 
+      {% if t.scheduled_at %}
+      <div class="flex items-center gap-2 text-xs px-3 py-1 bg-sky-50 border border-sky-200 text-sky-700 rounded-md">
+        ⏰ Programada para {{ t.scheduled_at[:16].replace('T', ' ') }} (worker la disparará automáticamente)
+      </div>
+      {% endif %}
+
       {% if t.status in ('pending', 'in_progress', 'awaiting_responses') %}
-      <div class="flex justify-end">
+      <div class="flex justify-end gap-2 items-center">
+        {% if t.status == 'pending' and not t.scheduled_at %}
+        {% set plan_lines = [] %}
+        {% for tg in t.targets %}{% set _ = plan_lines.append('• ' + (tg.contact_name or tg.contact_phone or 'sin nombre')) %}{% endfor %}
+        <button hx-post="/admin/tasks/{{ t.id }}/execute"
+                hx-target="closest details"
+                hx-swap="outerHTML"
+                hx-disabled-elt="this"
+                hx-confirm="🚀 Ejecutar task #{{ t.id }} ahora?&#10;&#10;Destinatarios:&#10;{{ plan_lines | join('\n') }}&#10;&#10;Se enviarán los mensajes inmediatamente."
+                class="text-xs bg-emerald-600 text-white hover:bg-emerald-700 px-3 py-1 rounded-md disabled:opacity-50">
+          🚀 Ejecutar ahora
+        </button>
+        {% endif %}
         <button hx-post="/admin/tasks/{{ t.id }}/cancel"
                 hx-target="closest details"
                 hx-swap="outerHTML"

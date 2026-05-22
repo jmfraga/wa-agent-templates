@@ -43,6 +43,43 @@ def _load_runtime_overrides() -> None:
         log.exception("no se pudieron cargar runtime overrides al boot")
 
 
+# Background scheduler — corre tasks con scheduled_at <= now() cada 60s.
+_scheduler_task: Any = None
+
+
+async def _scheduler_loop() -> None:
+    import asyncio
+    from . import agentic
+    log.info("scheduler loop iniciado (poll 60s)")
+    while True:
+        try:
+            ids = agentic.list_due_scheduled_task_ids(limit=20)
+            for tid in ids:
+                log.info("scheduler: ejecutando task #%s (scheduled_at vencido)", tid)
+                try:
+                    r = agentic.execute_task(tid)
+                    log.info("scheduler task #%s → sent=%s failed=%s", tid, r.get("sent"), r.get("failed"))
+                except Exception:  # noqa: BLE001
+                    log.exception("scheduler: execute_task %s falló", tid)
+        except Exception:  # noqa: BLE001
+            log.exception("scheduler loop iteration falló")
+        await asyncio.sleep(60)
+
+
+@app.on_event("startup")
+async def _start_scheduler() -> None:
+    import asyncio
+    global _scheduler_task
+    _scheduler_task = asyncio.create_task(_scheduler_loop())
+
+
+@app.on_event("shutdown")
+async def _stop_scheduler() -> None:
+    global _scheduler_task
+    if _scheduler_task is not None:
+        _scheduler_task.cancel()
+
+
 # ---------------------------------------------------------------------------
 # Admin auth dependency
 # ---------------------------------------------------------------------------
@@ -70,7 +107,7 @@ class KbFactUpsert(BaseModel):
     kb_slug: str
     key: str
     value: str
-    source: KbFactSource = KbFactSource.owner
+    source: KbFactSource = KbFactSource.jmf
     ttl_days: int | None = None
 
 
@@ -150,6 +187,7 @@ def list_tasks(status: str | None = None, limit: int = 50) -> dict[str, Any]:
                 "created_at": t.created_at.isoformat() if t.created_at else None,
                 "updated_at": t.updated_at.isoformat() if t.updated_at else None,
                 "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                "scheduled_at": t.scheduled_at.isoformat() if t.scheduled_at else None,
                 "targets": targets,
             })
         return {"tasks": out, "count": len(out)}
@@ -170,7 +208,7 @@ class TaskPreviewRequest(BaseModel):
 def preview_task(req: TaskPreviewRequest) -> dict[str, Any]:
     """Crea task agéntica en 'pending' y devuelve preview personalizado por target.
 
-    NO envía. UI/Telegram presentan preview a owner; tras confirmar → POST /tasks/{id}/send-all.
+    NO envía. UI/Telegram presentan preview a Owner; tras confirmar → POST /tasks/{id}/send-all.
     """
     from . import agentic
     from .models import ContactKind
@@ -226,6 +264,116 @@ def send_all_task(task_id: int, req: TaskSendAllRequest) -> dict[str, Any]:
     return agentic.send_all_pending(task_id, req.message_template)
 
 
+class TaskPatchRequest(BaseModel):
+    scheduled_at: str | None = None
+    asset_id: int | None = None
+    caption: str | None = None
+    message_template: str | None = None
+
+
+@app.post("/tasks/{task_id}/patch")
+def patch_task(task_id: int, req: TaskPatchRequest) -> dict[str, Any]:
+    """Patch parcial de una task — actualiza scheduled_at y/o context.asset_id/caption/message_template."""
+    from .models import Task
+    from datetime import timezone as _tz
+    with get_session() as s:
+        t = s.get(Task, task_id)
+        if t is None:
+            raise HTTPException(404, "task no existe")
+        if req.scheduled_at is not None:
+            if req.scheduled_at == "":
+                t.scheduled_at = None
+            else:
+                try:
+                    sched_dt = datetime.fromisoformat(req.scheduled_at.replace("Z", "+00:00"))
+                except ValueError as e:
+                    raise HTTPException(400, f"scheduled_at inválido: {e}")
+                if sched_dt.tzinfo is None:
+                    sched_dt = sched_dt.replace(tzinfo=_tz.utc)
+                t.scheduled_at = sched_dt
+        ctx = dict(t.context or {})
+        if req.asset_id is not None:
+            ctx["asset_id"] = int(req.asset_id)
+        if req.caption is not None:
+            ctx["caption"] = req.caption
+        if req.message_template is not None:
+            ctx["message_template"] = req.message_template
+        t.context = ctx
+        return {"ok": True, "task_id": task_id, "scheduled_at": t.scheduled_at.isoformat() if t.scheduled_at else None, "context": ctx}
+
+
+@app.post("/tasks/{task_id}/execute")
+def execute_task_endpoint(task_id: int) -> dict[str, Any]:
+    """Ejecuta una task pending (envía a todos los targets pending).
+
+    Usa task.context.asset_id+caption si presente (send_outbound_media),
+    si no usa task.context.message_template (send_outbound).
+    """
+    from . import agentic
+    r = agentic.execute_task(task_id)
+    if not r.get("ok") and r.get("error") and r.get("sent", 0) == 0 and r.get("failed", 0) == 0:
+        # Error duro (no targets, sin template, task no existe)
+        raise HTTPException(400, r["error"])
+    return r
+
+
+class TaskCreateRequest(BaseModel):
+    kind: str
+    summary: str
+    raw_instruction: str | None = None
+    target_contact_ids: list[int]
+    expected_names: list[str] | None = None
+    context: dict[str, Any] | None = None
+    scheduled_at: str | None = None  # ISO 8601
+    owner_phone: str | None = None
+
+
+@app.post("/tasks")
+def create_task_endpoint(req: TaskCreateRequest) -> dict[str, Any]:
+    """Crea task desde UI (no envía). Persiste asset_id/caption/message_template en context y scheduled_at."""
+    from . import agentic
+    from .models import ContactKind, Task
+
+    with get_session() as s:
+        if req.owner_phone:
+            p = sessions.sanitize_phone(req.owner_phone)
+            owner = s.scalar(select(Contact).where(Contact.phone == p, Contact.kind == ContactKind.owner))
+        else:
+            owner = s.scalar(select(Contact).where(Contact.kind == ContactKind.owner).limit(1))
+        if owner is None:
+            raise HTTPException(404, "no hay contacto kind='owner'")
+        owner_id = owner.id
+
+    r = agentic.create_task(
+        owner_id=owner_id,
+        kind=req.kind,
+        summary=req.summary,
+        raw_instruction=req.raw_instruction,
+        target_contact_ids=req.target_contact_ids,
+        context=req.context,
+        expected_names=req.expected_names,
+    )
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("error", "create_task failed"))
+
+    # Si vino scheduled_at, parsear y persistir
+    sched_iso = req.scheduled_at
+    if sched_iso:
+        try:
+            sched_dt = datetime.fromisoformat(sched_iso.replace("Z", "+00:00"))
+        except ValueError as e:
+            raise HTTPException(400, f"scheduled_at inválido: {e}")
+        with get_session() as s:
+            t = s.get(Task, r["task_id"])
+            if t is not None:
+                # Asegurar tz-aware (si UI manda naive, asumir UTC)
+                if sched_dt.tzinfo is None:
+                    from datetime import timezone as _tz
+                    sched_dt = sched_dt.replace(tzinfo=_tz.utc)
+                t.scheduled_at = sched_dt
+    return r
+
+
 @app.post("/tasks/{task_id}/cancel")
 def cancel_task(task_id: int) -> dict[str, Any]:
     from .models import Task, TaskTarget
@@ -252,10 +400,10 @@ class OwnerInstructRequest(BaseModel):
 
 @app.post("/owner/instruct")
 def owner_instruct(req: OwnerInstructRequest) -> dict[str, Any]:
-    """owner dicta una instrucción agéntica desde Telegram. Iris la procesa con tools agentic."""
+    """Owner dicta una instrucción agéntica desde Telegram. Iris la procesa con tools agentic."""
     from .models import ContactKind
 
-    # Resolver el owner (owner). Si no se pasa owner_phone, buscamos el primer contacto kind=owner.
+    # Resolver el owner (Owner). Si no se pasa owner_phone, buscamos el primer contacto kind=owner.
     with get_session() as s:
         if req.owner_phone:
             p = sessions.sanitize_phone(req.owner_phone)
@@ -281,7 +429,7 @@ def owner_instruct(req: OwnerInstructRequest) -> dict[str, Any]:
 
 @app.post("/owner/reply")
 def owner_reply(req: OwnerReplyRequest) -> dict[str, Any]:
-    """owner responde a un ticket; mandamos la respuesta al contacto vía relay."""
+    """Owner responde a un ticket; mandamos la respuesta al contacto vía relay."""
     with get_session() as s:
         t = s.get(Ticket, req.ticket_id)
         if t is None:
@@ -302,7 +450,7 @@ def _ticket_dict(t: Ticket) -> dict[str, Any]:
         "kind": t.kind,
         "summary": t.summary,
         "status": t.status.value,
-        "draft_for_owner": t.draft_for_owner,
+        "draft_for_jmf": t.draft_for_jmf,
         "owner_response": t.owner_response,
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,
@@ -595,7 +743,7 @@ def update_ticket(ticket_id: int, req: TicketUpdate) -> dict[str, Any]:
         if req.summary is not None:
             t.summary = req.summary
         if req.draft_for_owner is not None:
-            t.draft_for_owner = req.draft_for_owner  # column name is draft_for_owner in private (historical)
+            t.draft_for_jmf = req.draft_for_owner  # column name is draft_for_jmf in private (historical)
         return {"ok": True, "ticket_id": ticket_id}
 
 

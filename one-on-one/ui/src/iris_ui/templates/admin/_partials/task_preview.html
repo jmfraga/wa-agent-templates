@@ -50,8 +50,9 @@
             hx-confirm="Confirmar envío a {{ preview.targets | length }} destinatario(s)?"
             class="inline">
         <input type="hidden" name="message_template" value="{{ preview.message_template }}" />
+        {% if preview.has_asset %}<input type="hidden" name="has_asset" value="1" />{% endif %}
         <button type="submit" class="bg-emerald-600 text-white text-sm rounded-md px-4 py-1.5 hover:bg-emerald-700">
-          ✅ Confirmar y enviar
+          {% if preview.scheduled_at %}📅 Confirmar (programada {{ preview.scheduled_at[:16].replace('T', ' ') }}){% else %}✅ Confirmar y enviar{% endif %}
         </button>
       </form>
     </div>
