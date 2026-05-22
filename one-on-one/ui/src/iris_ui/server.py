@@ -25,7 +25,7 @@ TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
 # The package ships its own templates dir but we also want a project-level
-# /static at <project-root>/ui/static for assets that don't
+# /static at /Users/owner/Projects/iris/ui/static for assets that don't
 # live inside the package.
 PROJECT_STATIC_DIR = BASE_DIR.parent.parent.parent / "static"
 
@@ -229,6 +229,28 @@ async def upsert_kb(
             "brain_offline": data.get("brain_offline", False),
         },
     )
+
+
+@app.get("/media/{asset_id}")
+async def media_proxy(asset_id: int):
+    """Proxy de /media/{id}/raw del brain. Permite que la UI muestre la imagen
+    sin exponer el brain directo al navegador.
+    """
+    import httpx
+    from fastapi.responses import StreamingResponse, Response
+
+    url = f"{settings.BRAIN_URL}/media/{asset_id}/raw"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.get(url)
+            if r.status_code == 404:
+                return Response(status_code=404)
+            r.raise_for_status()
+            content = r.content
+            content_type = r.headers.get("content-type", "application/octet-stream")
+            return Response(content=content, media_type=content_type)
+    except httpx.HTTPError:
+        return Response(status_code=502)
 
 
 @app.get("/health")

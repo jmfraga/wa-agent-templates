@@ -37,8 +37,8 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
 
     # --- Relays ---
-    # Sprint 2 frozen decision: tickets a OWNER van por Telegram bot dedicado.
-    # OWNER_RELAY_WEBHOOK = relay-bot Telegram (brain → OWNER).
+    # Sprint 2 frozen decision: tickets a owner van por Telegram bot dedicado.
+    # OWNER_RELAY_WEBHOOK = relay-bot Telegram (brain → owner).
     OWNER_RELAY_WEBHOOK: str | None = "http://localhost:8098/send-to-owner"
     # CONTACT_RELAY_WEBHOOK = wa-listener (brain → paciente vía WhatsApp).
     CONTACT_RELAY_WEBHOOK: str | None = "http://localhost:8099/send-to-contact"
@@ -52,6 +52,21 @@ class Settings(BaseSettings):
     # Para report_to_owner: brain manda Telegram directo (no via relay-bot HTTP).
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
+
+    # --- Phase 1c: Media outbound ---
+    MEDIA_STORAGE_DIR: Path = Path("/var/lib/iris/media")
+    # URL interna desde donde wa-listener descarga el binario al enviar imagen.
+    # localhost porque brain+wa-listener viven en el mismo RPi5.
+    MEDIA_INTERNAL_URL: str = "http://127.0.0.1:8096"
+    # Whitelist de dominios para ingest_from_url (marketing).
+    MEDIA_WHITELIST_DOMAINS: list[str] = [
+        "marketing.simacademy.lat",
+        "info.simacademy.lat",
+        "info.emergencias.com.mx",
+        "blog.simacademy.lat",
+        "blog.emergencias.com.mx",
+    ]
+    MEDIA_MAX_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
 
 settings = Settings()

@@ -6,6 +6,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
     Enum,
     ForeignKey,
@@ -52,7 +53,7 @@ class MessageDirection(str, enum.Enum):
 
 class TicketStatus(str, enum.Enum):
     open = "open"
-    awaiting_owner = "awaiting_owner"
+    awaiting_jmf = "awaiting_owner"
     awaiting_patient = "awaiting_patient"
     closed = "closed"
 
@@ -65,6 +66,13 @@ class ThreadStatus(str, enum.Enum):
 class KbFactSource(str, enum.Enum):
     owner = "owner"
     landing = "landing"
+
+
+class MediaSource(str, enum.Enum):
+    marketing = "marketing"
+    ui_upload = "ui_upload"
+    telegram = "telegram"
+    whatsapp = "whatsapp"
 
 
 class Contact(Base):
@@ -108,6 +116,11 @@ class Message(Base):
     model_used: Mapped[str | None] = mapped_column(String(64))
     tokens_input: Mapped[int | None] = mapped_column(Integer)
     tokens_output: Mapped[int | None] = mapped_column(Integer)
+    # Phase 1c — media outbound (imagen híbrida en tasks agénticas)
+    media_asset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("media_assets.id", ondelete="SET NULL"), nullable=True
+    )
+    media_caption: Mapped[str | None] = mapped_column(Text)
 
     thread: Mapped["Thread"] = relationship(back_populates="messages")
 
@@ -170,7 +183,7 @@ class IntentLog(Base):
 
 
 class Task(Base):
-    """Tarea agéntica dictada por owner (OWNER). Puede tener N targets."""
+    """Tarea agéntica dictada por owner (owner). Puede tener N targets."""
     __tablename__ = "tasks"
     id: Mapped[int] = mapped_column(primary_key=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), index=True)
@@ -185,6 +198,34 @@ class Task(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MediaAsset(Base):
+    """Asset multimedia (imagen / pdf) reutilizable en tasks agénticas.
+
+    3 fuentes: marketing (URL whitelisted), ui_upload, telegram (owner), whatsapp (owner).
+    Dedupe por sha256. Soft-delete vía deleted_at.
+    """
+    __tablename__ = "media_assets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[MediaSource] = _enum_col(MediaSource, "media_source")
+    filename: Mapped[str] = mapped_column(Text)
+    mime_type: Mapped[str] = mapped_column(Text)
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    sha256: Mapped[str] = mapped_column(Text, unique=True)
+    storage_path: Mapped[str] = mapped_column(Text)
+    origin_url: Mapped[str | None] = mapped_column(Text)
+    label: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[list | None] = mapped_column(JSON)
+    uploaded_by_contact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("contacts.id", ondelete="SET NULL")
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    use_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class TaskTarget(Base):

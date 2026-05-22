@@ -351,6 +351,144 @@ def send_outbound(task_id: int, target_id: int, body: str) -> dict[str, Any]:
     }
 
 
+# --- Media outbound (Phase 1c) ----------------------------------------------
+
+
+def find_media(query: str, limit: int = 5, source: str | None = None) -> dict[str, Any]:
+    """Wrap de media.find_media para uso como tool agéntica."""
+    from . import media as media_mod
+    return media_mod.find_media(query, limit=limit, source=source)
+
+
+def import_marketing_asset(url: str, label: str | None = None, tags: list[str] | None = None) -> dict[str, Any]:
+    """Descarga URL whitelisted (marketing.*) y persiste como MediaAsset."""
+    from . import media as media_mod
+    try:
+        r = media_mod.ingest_from_url(url, label=label, tags=tags, source="marketing")
+        return {"ok": True, **r, "asset_id": r["id"]}
+    except media_mod.MediaError as e:
+        return {"ok": False, "error": e.code, "detail": str(e)}
+
+
+def send_outbound_media(
+    task_id: int,
+    target_id: int,
+    asset_id: int,
+    caption: str | None = None,
+) -> dict[str, Any]:
+    """Envía imagen al target via wa-listener, persiste en messages con media_asset_id."""
+    from . import media as media_mod
+
+    with get_session() as s:
+        tt = s.get(TaskTarget, target_id)
+        if tt is None or tt.task_id != task_id:
+            return {"ok": False, "error": "task_target no existe o no pertenece a la task"}
+        c = s.get(Contact, tt.contact_id)
+        if c is None:
+            return {"ok": False, "error": "contacto no existe"}
+        task = s.get(Task, task_id)
+        if task is not None and int(tt.contact_id) == int(task.owner_id):
+            log.error("send_outbound_media BLOCKED: target_id=%s es el owner", target_id)
+            tt.status = "failed"
+            return {"ok": False, "error": "target es el owner — no se permite enviar media por WhatsApp"}
+        # Valida que el asset exista (y no esté borrado)
+        asset = s.get(__import__("iris_brain.models", fromlist=["MediaAsset"]).MediaAsset, asset_id)
+        if asset is None or asset.deleted_at is not None:
+            return {"ok": False, "error": "media_asset no existe o fue borrado"}
+        # Caption final (puede ir None)
+        if caption is not None:
+            caption = caption[:1024]  # límite WA
+        # Thread
+        thread = s.scalar(
+            select(Thread)
+            .where(Thread.contact_id == c.id)
+            .order_by(Thread.opened_at.desc())
+            .limit(1)
+        )
+        if thread is None:
+            thread = Thread(contact_id=c.id, channel="whatsapp")
+            s.add(thread)
+            s.flush()
+        thread_id = thread.id
+        phone = c.phone
+        asset_label = asset.label or asset.filename
+
+    # POST a wa-listener (payload extendido con media)
+    wa_url = (settings.CONTACT_RELAY_WEBHOOK or "http://localhost:8099/send-to-contact")
+    media_url = f"{settings.MEDIA_INTERNAL_URL.rstrip('/')}/media/{asset_id}/raw"
+    payload = {
+        "type": "outbound_media",
+        "phone": phone,
+        "thread_id": thread_id,
+        "media": {
+            "type": "image",
+            "url": media_url,
+            "caption": caption,
+        },
+    }
+    try:
+        with httpx.Client(timeout=20) as client:
+            r = client.post(wa_url, json=payload)
+            r.raise_for_status()
+            wa_resp = r.json()
+    except httpx.HTTPError as e:
+        log.exception("send_outbound_media: wa-listener falló")
+        with get_session() as s:
+            tt2 = s.get(TaskTarget, target_id)
+            if tt2 is not None:
+                tt2.status = "failed"
+        return {"ok": False, "error": str(e)}
+
+    if not wa_resp.get("ok"):
+        log.warning("send_outbound_media: wa-listener returned %s", wa_resp)
+        with get_session() as s:
+            tt2 = s.get(TaskTarget, target_id)
+            if tt2 is not None:
+                tt2.status = "failed"
+        return {"ok": False, "error": wa_resp.get("error", "wa_listener_fail")}
+
+    # Persistir message + actualizar task_target
+    now = datetime.now(timezone.utc)
+    body_for_record = caption or f"[imagen: {asset_label}]"
+    with get_session() as s:
+        m = Message(
+            thread_id=thread_id,
+            direction=MessageDirection.out,
+            body=body_for_record,
+            model_used="agentic_outbound_media",
+            media_asset_id=asset_id,
+            media_caption=caption,
+        )
+        s.add(m)
+        tt2 = s.get(TaskTarget, target_id)
+        if tt2 is not None:
+            tt2.message_sent = body_for_record
+            tt2.message_sent_at = now
+            tt2.thread_id = thread_id
+            tt2.status = "sent"
+        from sqlalchemy import func as sa_func
+        pending_count = s.scalar(
+            select(sa_func.count())
+            .select_from(TaskTarget)
+            .where(TaskTarget.task_id == task_id, TaskTarget.status == "pending")
+        ) or 0
+        if pending_count == 0:
+            t = s.get(Task, task_id)
+            if t is not None and t.status in ("pending", "in_progress"):
+                t.status = "awaiting_responses"
+
+    # Incrementa use_count + last_used_at
+    media_mod.record_use(asset_id)
+
+    return {
+        "ok": True,
+        "message_id": wa_resp.get("message_id"),
+        "target_id": target_id,
+        "thread_id": thread_id,
+        "asset_id": asset_id,
+    }
+
+
 # --- Owner reporting --------------------------------------------------------
 
 def report_to_owner(text: str, task_id: int | None = None) -> dict[str, Any]:

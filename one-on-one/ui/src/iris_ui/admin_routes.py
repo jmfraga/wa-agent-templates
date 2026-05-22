@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -583,6 +583,131 @@ async def admin_cancel_task(request: Request, task_id: int) -> HTMLResponse:
         except httpx.HTTPError as e:
             return _HTML(f'<div class="p-3 text-rose-700">Error al cancelar: {e}</div>')
     return _HTML(f'<div class="p-3 text-emerald-700">✅ Task #{task_id} cancelada — <a href="/admin/tasks" class="underline">refrescar lista</a></div>')
+
+
+# --- Media (Phase 1c) ----------------------------------------------------
+
+
+@router.get("/media", response_class=HTMLResponse)
+async def admin_media(
+    request: Request,
+    q: str = "",
+    source: str = "",
+) -> HTMLResponse:
+    import httpx
+    params: dict[str, str] = {}
+    if q:
+        params["q"] = q
+    if source:
+        params["source"] = source
+    items: list[dict] = []
+    brain_offline = False
+    async with httpx.AsyncClient(timeout=10) as c:
+        try:
+            r = await c.get(f"{settings.BRAIN_URL}/media", params=params)
+            r.raise_for_status()
+            data = r.json()
+            items = data.get("items", [])
+        except httpx.HTTPError:
+            brain_offline = True
+    return _render(
+        request,
+        "admin/media.html",
+        {
+            "active": "media",
+            "items": items,
+            "q": q,
+            "source": source,
+            "brain_offline": brain_offline,
+        },
+        partial="admin/_partials/media_grid.html",
+    )
+
+
+@router.post("/media/upload", response_class=HTMLResponse)
+async def admin_media_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    label: str = Form(""),
+    tags: str = Form(""),
+) -> HTMLResponse:
+    import httpx
+    from fastapi.responses import HTMLResponse as _HTML
+    data = await file.read()
+    files = {"file": (file.filename or "upload.bin", data, file.content_type or "application/octet-stream")}
+    form_data = {"source": "ui_upload"}
+    if label:
+        form_data["label"] = label
+    if tags:
+        form_data["tags"] = tags
+    async with httpx.AsyncClient(timeout=30) as c:
+        try:
+            r = await c.post(f"{settings.BRAIN_URL}/media/upload", files=files, data=form_data)
+            r.raise_for_status()
+            res = r.json()
+        except httpx.HTTPError as e:
+            err = str(e)
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    err = e.response.json().get("detail", err)
+                except Exception:
+                    pass
+            return _HTML(f'<div class="p-3 text-rose-700">✗ {err}</div>')
+    dedupe = " (dedupe)" if res.get("dedupe") else ""
+    return _HTML(
+        f'<div class="p-3 text-emerald-700">✓ Subida \'{res.get("label") or res.get("filename")}\' id={res["id"]}{dedupe} — '
+        f'<a href="/admin/media" class="underline">refrescar</a></div>'
+    )
+
+
+@router.post("/media/ingest-url", response_class=HTMLResponse)
+async def admin_media_ingest_url(
+    request: Request,
+    url: str = Form(...),
+    label: str = Form(""),
+    tags: str = Form(""),
+) -> HTMLResponse:
+    import httpx
+    from fastapi.responses import HTMLResponse as _HTML
+    payload: dict = {"url": url, "source": "marketing"}
+    if label:
+        payload["label"] = label
+    if tags:
+        payload["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+    async with httpx.AsyncClient(timeout=30) as c:
+        try:
+            r = await c.post(f"{settings.BRAIN_URL}/media/ingest-url", json=payload)
+            r.raise_for_status()
+            res = r.json()
+        except httpx.HTTPError as e:
+            err = str(e)
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    err = e.response.json().get("detail", err)
+                except Exception:
+                    pass
+            return _HTML(f'<div class="p-3 text-rose-700">✗ {err}</div>')
+    dedupe = " (dedupe)" if res.get("dedupe") else ""
+    return _HTML(
+        f'<div class="p-3 text-emerald-700">✓ Importada \'{res.get("label") or res.get("filename")}\' id={res["id"]}{dedupe} — '
+        f'<a href="/admin/media" class="underline">refrescar</a></div>'
+    )
+
+
+@router.delete("/media/{asset_id}", response_class=HTMLResponse)
+async def admin_media_delete(request: Request, asset_id: int) -> HTMLResponse:
+    import httpx
+    from fastapi.responses import HTMLResponse as _HTML
+    async with httpx.AsyncClient(timeout=10) as c:
+        try:
+            r = await c.delete(f"{settings.BRAIN_URL}/media/{asset_id}")
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            return _HTML(f'<div class="p-2 text-rose-700">✗ {e}</div>')
+    return _HTML(
+        f'<div class="p-2 text-emerald-700">🗑 Media #{asset_id} borrada — '
+        f'<a href="/admin/media" class="underline">refrescar</a></div>'
+    )
 
 
 @router.get("/whatsapp", response_class=HTMLResponse)
