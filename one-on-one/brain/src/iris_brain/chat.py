@@ -208,6 +208,45 @@ def handle_message(
         if c is not None:
             contact_kind = c.kind.value if c.kind else None
     if contact_kind == "owner":
+        # Phase 1c — Ingesta WA owner: si manda foto con caption 'guarda como X',
+        # persistimos el asset y respondemos confirmación, sin pasar al flujo agéntico.
+        if media_url and media_url.startswith("http"):
+            from . import media as media_mod
+            if media_mod.looks_like_ingest_caption(text):
+                label, tags = media_mod.parse_ingest_caption(text)
+                try:
+                    r = media_mod.ingest_from_url(
+                        media_url,
+                        label=label,
+                        tags=tags,
+                        source="whatsapp",
+                        uploaded_by_contact_id=contact_id,
+                        enforce_whitelist=False,
+                    )
+                    dedupe = r.get("dedupe", False)
+                    reply = (
+                        f"📸 Guardada como '{label}' (id={r['id']}, source=whatsapp"
+                        + (", dedupe" if dedupe else "") + ") ✓"
+                    )
+                except media_mod.MediaError as e:
+                    reply = f"❌ No pude guardar la imagen: {e}"
+                except Exception as e:  # noqa: BLE001
+                    log.exception("owner WA media ingest failed")
+                    reply = f"❌ Error guardando la imagen: {e}"
+                sessions.append_message(
+                    thread_id, MessageDirection.out, reply, model_used="owner_media_ingest",
+                )
+                return {
+                    "ok": True,
+                    "thread_id": thread_id,
+                    "contact_id": contact_id,
+                    "intent": "owner_media_ingest",
+                    "intent_confidence": 1.0,
+                    "safety": None,
+                    "ticket_id": None,
+                    "reply": reply,
+                    "model": "owner_media_ingest",
+                }
         intent = "owner_instruction"
         intent_confidence = 1.0
         msgs = list(history)
@@ -367,7 +406,7 @@ def handle_message(
                     f"de tipo {intent} con owner. Solo responde al paciente con una frase puente "
                     f"breve (1-2 líneas), personalizada con su nombre si lo sabes, en tono cálido "
                     f"de Iris. Ejemplos: 'Gracias {{nombre}}, déjame checar con el doctor', "
-                    f"'Va, paso el contexto al Dr. Owner y te confirmo en cuanto sepa', etc. Varía.]"
+                    f"'Va, paso el contexto al Dr. Fraga y te confirmo en cuanto sepa', etc. Varía.]"
                 ),
             }
         reply, usage_out, _stop = _direct_reply(msgs, contact_id=contact_id, thread_id=thread_id)

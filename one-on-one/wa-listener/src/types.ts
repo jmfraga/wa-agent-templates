@@ -10,7 +10,7 @@ export interface BrainChatRequest {
 
 export interface BrainChatResponse {
   reply: string;
-  // Si el brain decide escalar a OWNER, devuelve un ticket que el relay-bot enviará.
+  // Si el brain decide escalar a owner, devuelve un ticket que el relay-bot enviará.
   escalate?: {
     ticket_id: string;
     summary: string;
@@ -26,21 +26,33 @@ export interface RelaySendRequest {
   text: string;
 }
 
-export interface OwnerReplyRequest {
+export interface JmfReplyRequest {
   ticket_id: string;
   contact_phone: string;
   text: string;
 }
 
 /**
- * Sprint 2: el brain llama al listener para entregar respuestas async de OWNER
- * al paciente (cuando OWNER ya contestó el ticket y necesitamos mandar
+ * Sprint 2: el brain llama al listener para entregar respuestas async de owner
+ * al paciente (cuando owner ya contestó el ticket y necesitamos mandar
  * la respuesta por el mismo canal WA, fuera del flujo síncrono del inbound).
  */
+export interface SendToContactMedia {
+  type: 'image';
+  url: string;
+  mime_type?: string;
+  caption?: string;
+}
+
 export interface SendToContactRequest {
   phone: string; // E.164, ej. "+5215512345678"
-  body: string;
-  thread_id?: string;
+  body?: string;
+  thread_id?: string | number;
+  // Phase 1c: imagen outbound. Si se da, el listener envía como imageMessage
+  // descargando `url` (típicamente http://127.0.0.1:8096/media/{id}/raw).
+  media?: SendToContactMedia;
+  // Tipo del payload (cosmetico, para logs)
+  type?: string;
 }
 
 export interface SendToContactResponse {

@@ -64,7 +64,7 @@ class Relay:
             return {"ok": False, "error": str(e)}
 
     def send_to_owner(self, ticket: dict[str, Any]) -> dict[str, Any]:
-        """Manda ticket al relay-bot Telegram para aprobación/respuesta de OWNER."""
+        """Manda ticket al relay-bot Telegram para aprobación/respuesta de owner."""
         payload = {
             "type": "ticket_to_owner",
             "ticket_id": ticket.get("id") or ticket.get("ticket_id"),
@@ -78,8 +78,31 @@ class Relay:
         }
         return self._post(self.owner_webhook_url, payload, label="owner")
 
+    def send_media_to_contact(
+        self,
+        thread_id: int,
+        phone: str,
+        asset_id: int,
+        caption: str | None = None,
+    ) -> dict[str, Any]:
+        """Envía imagen al contacto vía wa-listener. El listener descarga desde MEDIA_INTERNAL_URL."""
+        if not self.contact_webhook_url:
+            return {"ok": False, "noop": True, "reason": "no_webhook"}
+        media_url = f"{settings.MEDIA_INTERNAL_URL.rstrip('/')}/media/{asset_id}/raw"
+        payload: dict[str, Any] = {
+            "type": "outbound_media",
+            "phone": phone,
+            "thread_id": thread_id,
+            "media": {
+                "type": "image",
+                "url": media_url,
+                "caption": caption,
+            },
+        }
+        return self._post(self.contact_webhook_url, payload, label="contact_media")
+
     def send_to_contact(self, thread_id: int, body: str) -> dict[str, Any]:
-        """Manda respuesta de OWNER al contacto vía wa-listener.
+        """Manda respuesta de owner al contacto vía wa-listener.
 
         El wa-listener necesita `phone` (no `thread_id`); lo resolvemos en DB.
         """

@@ -11,7 +11,7 @@
  *
  * Sprint 2: además expone un HTTP server (puerto WA_LISTENER_PORT, default
  * 8099) con `POST /send-to-contact` para que el brain pueda entregar
- * respuestas async de OWNER al paciente sin pasar por el flujo síncrono.
+ * respuestas async de owner al paciente sin pasar por el flujo síncrono.
  */
 
 import 'dotenv/config';
@@ -75,7 +75,7 @@ function extractMediaHint(msg: proto.IMessage | null | undefined): string | unde
 }
 
 function jidToPhone(jid: string): string {
-  // 1987654321@s.whatsapp.net -> +1987654321
+  // 5219991110002@s.whatsapp.net -> +5219991110002
   const bare = jid.split('@')[0]?.split(':')[0] ?? jid;
   return bare.startsWith('+') ? bare : `+${bare}`;
 }
@@ -152,7 +152,8 @@ async function handleSendToContact(
     } satisfies SendToContactResponse);
   }
 
-  if (!payload.phone || !payload.body) {
+  const hasMedia = payload.media?.type === 'image' && !!payload.media.url;
+  if (!payload.phone || (!payload.body && !hasMedia)) {
     return sendJson(res, 400, {
       ok: false,
       error: 'missing_phone_or_body',
@@ -169,14 +170,39 @@ async function handleSendToContact(
 
   const jid = phoneToJid(payload.phone);
   try {
-    const sent = await state.sock.sendMessage(jid, { text: payload.body });
+    let sent;
+    if (hasMedia && payload.media) {
+      // Phase 1c: imagen outbound. Baileys descarga `url` internamente y la envía
+      // como imageMessage con caption opcional.
+      const caption = payload.media.caption ?? payload.body ?? '';
+      sent = await state.sock.sendMessage(jid, {
+        image: { url: payload.media.url },
+        caption: caption || undefined,
+      });
+      const messageId = sent?.key?.id ?? undefined;
+      log.info(
+        {
+          phone: payload.phone,
+          thread_id: payload.thread_id,
+          message_id: messageId,
+          media_url: payload.media.url,
+          caption_len: caption.length,
+        },
+        'send-to-contact (media) ok',
+      );
+      return sendJson(res, 200, {
+        ok: true,
+        message_id: messageId ?? undefined,
+      } satisfies SendToContactResponse);
+    }
+    sent = await state.sock.sendMessage(jid, { text: payload.body as string });
     const messageId = sent?.key?.id ?? undefined;
     log.info(
       {
         phone: payload.phone,
         thread_id: payload.thread_id,
         message_id: messageId,
-        len: payload.body.length,
+        len: (payload.body as string).length,
       },
       'send-to-contact ok',
     );
@@ -276,7 +302,7 @@ async function startListener(): Promise<void> {
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
       state.lastQr = qr;
-      log.warn('QR recibido — abre http://<your-host>:8099/qr en navegador para escanearlo');
+      log.warn('QR recibido — abre http://100.71.128.102:8099/qr en navegador para escanearlo');
       qrcode.generate(qr, { small: true });
     }
     if (connection === 'open') {

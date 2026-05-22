@@ -1,7 +1,7 @@
 [project]
 name = "iris-brain"
 version = "0.1.0"
-description = "Brain daemon HTTP para Iris v2 (asistente WhatsApp del Dr. Dr. Owner)"
+description = "Brain daemon HTTP para Iris v2 (asistente WhatsApp del Dr. Juan Manuel Fraga)"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115",
@@ -13,6 +13,7 @@ dependencies = [
   "alembic>=1.13",
   "pydantic-settings>=2.0",
   "python-dotenv>=1.0",
+  "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

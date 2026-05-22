@@ -6,7 +6,8 @@ from typing import Any
 
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -69,7 +70,7 @@ class KbFactUpsert(BaseModel):
     kb_slug: str
     key: str
     value: str
-    source: KbFactSource = KbFactSource.manual
+    source: KbFactSource = KbFactSource.owner
     ttl_days: int | None = None
 
 
@@ -351,7 +352,7 @@ class TicketStatusUpdate(BaseModel):
 
 @app.post("/tickets/{ticket_id}/status")
 def set_ticket_status(ticket_id: int, req: TicketStatusUpdate) -> dict[str, Any]:
-    """Cambia el status arbitrariamente (open/awaiting_owner/awaiting_patient/closed)."""
+    """Cambia el status arbitrariamente (open/awaiting_jmf/awaiting_patient/closed)."""
     from datetime import datetime, timezone
     try:
         new_status = TicketStatus(req.status)
@@ -700,6 +701,8 @@ def get_contact(phone: str) -> dict[str, Any]:
                     "body": m.body,
                     "ts": m.ts.isoformat() if m.ts else None,
                     "model_used": m.model_used,
+                    "media_asset_id": m.media_asset_id,
+                    "media_caption": m.media_caption,
                 }
                 for m in msg_rows
             ]
@@ -801,6 +804,123 @@ def reset_endpoint(req: ResetRequest) -> dict[str, Any]:
             t.status = ThreadStatus.closed
             closed += 1
     return {"ok": True, "closed": closed}
+
+
+# ---------------------------------------------------------------------------
+# Media endpoints (Phase 1c) — imágenes híbridas en tasks agénticas
+# ---------------------------------------------------------------------------
+
+
+class MediaIngestUrlRequest(BaseModel):
+    url: str
+    label: str | None = None
+    tags: list[str] | None = None
+    source: str = "marketing"
+
+
+@app.post("/media/ingest-url")
+def media_ingest_url(req: MediaIngestUrlRequest) -> dict[str, Any]:
+    from . import media as media_mod
+    try:
+        return media_mod.ingest_from_url(
+            req.url, label=req.label, tags=req.tags, source=req.source
+        )
+    except media_mod.MediaError as e:
+        code_to_status = {
+            "not_whitelisted": 403,
+            "bad_mime": 400,
+            "bad_source": 400,
+            "too_large": 413,
+            "fetch_failed": 502,
+            "empty": 400,
+        }
+        raise HTTPException(code_to_status.get(e.code, 400), str(e))
+
+
+@app.post("/media/upload")
+async def media_upload(
+    file: UploadFile = File(...),
+    source: str = Form("ui_upload"),
+    label: str | None = Form(None),
+    tags: str | None = Form(None),  # JSON-encoded list o coma-separados
+) -> dict[str, Any]:
+    from . import media as media_mod
+    import json as _json
+
+    data = await file.read()
+    mime = (file.content_type or "").split(";")[0].strip().lower()
+    if not mime:
+        # Fallback por extensión
+        name = (file.filename or "").lower()
+        if name.endswith((".jpg", ".jpeg")):
+            mime = "image/jpeg"
+        elif name.endswith(".png"):
+            mime = "image/png"
+        elif name.endswith(".webp"):
+            mime = "image/webp"
+        elif name.endswith(".pdf"):
+            mime = "application/pdf"
+
+    parsed_tags: list[str] | None = None
+    if tags:
+        try:
+            parsed = _json.loads(tags)
+            if isinstance(parsed, list):
+                parsed_tags = [str(x) for x in parsed]
+        except Exception:
+            parsed_tags = [t.strip() for t in tags.split(",") if t.strip()]
+
+    try:
+        return media_mod.ingest_from_bytes(
+            data=data,
+            mime_type=mime,
+            source=source,
+            label=label,
+            tags=parsed_tags,
+            filename_hint=file.filename,
+        )
+    except media_mod.MediaError as e:
+        code_to_status = {
+            "bad_mime": 400,
+            "bad_source": 400,
+            "too_large": 413,
+            "empty": 400,
+        }
+        raise HTTPException(code_to_status.get(e.code, 400), str(e))
+
+
+@app.get("/media/{asset_id}/raw")
+def media_raw(asset_id: int):
+    from . import media as media_mod
+    info = media_mod.get_storage_path(asset_id)
+    if info is None:
+        raise HTTPException(404, "media no existe o fue borrado")
+    storage_path, mime_type, filename = info
+    return FileResponse(storage_path, media_type=mime_type, filename=filename)
+
+
+@app.get("/media/{asset_id}")
+def media_metadata(asset_id: int) -> dict[str, Any]:
+    from . import media as media_mod
+    m = media_mod.get_media(asset_id)
+    if m is None:
+        raise HTTPException(404, "media no existe")
+    return m
+
+
+@app.get("/media")
+def media_search(q: str | None = None, source: str | None = None, limit: int = 50) -> dict[str, Any]:
+    from . import media as media_mod
+    return media_mod.find_media(q or "", limit=limit, source=source)
+
+
+@app.delete("/media/{asset_id}")
+def media_delete(asset_id: int) -> dict[str, Any]:
+    from . import media as media_mod
+    r = media_mod.soft_delete(asset_id)
+    if not r.get("ok"):
+        raise HTTPException(404, r.get("error", "not_found"))
+    return r
 
 
 # ---------------------------------------------------------------------------

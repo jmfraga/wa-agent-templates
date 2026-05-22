@@ -15,16 +15,25 @@ TOOLS: list[dict] = [
     {
         "name": "lookup_kb_fact",
         "description": (
-            "Consulta un dato (key/value) de una knowledge base (KB). Úsala SIEMPRE antes de "
-            "responder cualquier pregunta sobre productos/servicios del dueño — nunca improvises.\n\n"
-            "Slugs disponibles: dependen de cómo el dueño haya cargado los KBs en la DB. "
-            "Convención típica:\n"
-            "  - un slug por producto/servicio (ej. 'service-a', 'service-b').\n"
-            "  - slug especial '_global' para info no atada a un servicio (contacto admin, sitio, etc).\n\n"
-            "Keys comunes (sugeridas, editables): 'name', 'price', 'duration', 'modality', 'landing_url', "
-            "'admin_contact', 'audience', 'requirements'.\n\n"
-            "Estrategia: si no estás 100% seguro del slug o key, llama con tu mejor guess; puedes invocarla "
-            "varias veces en el mismo turno. Si no encuentras, usa `list_kb_facts` para ver qué existe.\n\n"
+            "Consulta información de cursos vigentes del Dr. Fraga (fechas, precios, modalidad, "
+            "duración, cupos, links, contactos). DEBES llamar esta tool ANTES de responder cualquier "
+            "pregunta sobre cursos — nunca improvises.\n\n"
+            "Slugs disponibles:\n"
+            "- 'blsacls' — paquete BLS + ACLS Querétaro (si el usuario dice 'ACLS' o 'BLS', usa este slug)\n"
+            "- 'scpa' — Heartsaver RCP + DEA (primeros respondientes)\n"
+            "- 'eusim1' — EuSim Nivel 1 (simulación clínica básica)\n"
+            "- 'eusim2' — EuSim Nivel 2 (simulación avanzada)\n"
+            "- 'debriefing' — Debriefing con IA para instructores\n"
+            "- 'has-magia-con-claude' — Curso de Claude/IA para personal de salud\n"
+            "- 'actores' — Formación de Actores para Simulación\n"
+            "- 'mindfulness1' — Mindfulness clínico\n"
+            "- 'ortopedia' — Webinar de IA aplicada a Ortopedia\n"
+            "- '_global' — info global no atada a un curso: tanya_phone, urgencia_telefono, sitios, etc.\n\n"
+            "Keys comunes: 'nombre', 'precio_mxn', 'fechas', 'modalidad', 'duracion', 'cupo', "
+            "'landing_url', 'admin_contact', 'audiencia', 'estatus_cupos', 'sede', 'requisitos'.\n\n"
+            "Estrategia: si no estás 100% seguro del slug o key, llama esta tool con tu mejor guess. "
+            "Puedes llamarla varias veces en el mismo turno. Si no encuentras nada con varios intentos, "
+            "usa `list_kb_facts` para ver qué existe.\n\n"
             "Devuelve {found: bool, kb_slug, key, value?, source?, version?}."
         ),
         "input_schema": {
@@ -32,11 +41,11 @@ TOOLS: list[dict] = [
             "properties": {
                 "kb_slug": {
                     "type": "string",
-                    "description": "Slug exacto del KB (ej. 'service-a', '_global').",
+                    "description": "Slug exacto del curso (ej. 'blsacls', 'eusim2', '_global').",
                 },
                 "key": {
                     "type": "string",
-                    "description": "Campo a consultar (ej. 'price', 'landing_url').",
+                    "description": "Campo a consultar (ej. 'precio_mxn', 'fechas', 'landing_url').",
                 },
             },
             "required": ["kb_slug", "key"],
@@ -85,11 +94,11 @@ TOOLS: list[dict] = [
             "- Te dio contexto útil para futuras conversaciones → notes_append.\n\n"
             "kinds válidos: paciente, prospecto_curso, asesoria, colega, amigo, familia, otro.\n\n"
             "Si el contacto NO tiene nombre todavía, PRESENTATE y pregunta el nombre antes de "
-            "abrir tickets de citas o cursos: 'Hola, soy Iris, asistente del owner. ¿Con quién "
+            "abrir tickets de citas o cursos: 'Hola, soy Iris, asistente del Dr. Fraga. ¿Con quién "
             "tengo el gusto?'. Una vez te lo diga, llama esta tool con name.\n\n"
             "notes_append agrega texto al campo notes existente (no lo reemplaza). Usa frases cortas. "
-            "Ejemplos buenos: 'hija de paciente Sra. X', 'instructora ExampleCorp 2025', "
-            "'pidió info de servicio-a en sept', 'prefiere viernes'.\n\n"
+            "Ejemplos buenos: 'hija de paciente Sra. González', 'instructora SimAcademy 2025', "
+            "'pidió info ACLS sept', 'prefiere viernes', 'sin IVA por ser ext'.\n\n"
             "Si solo quieres reemplazar todo notes, usa notes_replace.\n\n"
             "Devuelve {ok, contact_id, fields_updated: [...]}."
         ),
@@ -103,17 +112,17 @@ TOOLS: list[dict] = [
                     "enum": ["owner", "paciente", "prospecto_curso", "asesoria", "colega", "amigo", "familia", "otro"],
                     "description": (
                         "Categoría del contacto. "
-                        "paciente = consulta o quiere consultar al owner. "
+                        "paciente = consulta o quiere consultar al doctor. "
                         "prospecto_curso = interesado en cursos. "
                         "asesoria = busca asesoría profesional (legal, gestoría). "
                         "colega = profesional de salud o educación (médico, enfermera, instructor, profesor). "
                         "amigo = amistad personal. "
-                        "familia = familiar del owner. "
+                        "familia = familiar del doctor. "
                         "otro = no clasifica claramente."
                     ),
                 },
                 "notes_append": {"type": "string", "description": "Nota corta a sumar a las existentes."},
-                "notes_replace": {"type": "string", "description": "Reemplaza completamente las notas. Úsalo solo si OWNER lo pide."},
+                "notes_replace": {"type": "string", "description": "Reemplaza completamente las notas. Úsalo solo si owner lo pide."},
             },
             "required": ["phone"],
         },
@@ -123,9 +132,9 @@ TOOLS: list[dict] = [
         "name": "search_contacts",
         "description": (
             "Busca contactos en el directorio por nombre, teléfono o notas (fuzzy ILIKE). "
-            "Úsalo cuando OWNER te pida hacer algo con una persona y solo te dé su nombre o referencia parcial. "
+            "Úsalo cuando owner te pida hacer algo con una persona y solo te dé su nombre o referencia parcial. "
             "Ej: 'manda mensaje a Roberto' → search_contacts('Roberto'). "
-            "Si devuelve varios resultados, pregunta a OWNER cuál antes de proceder. "
+            "Si devuelve varios resultados, pregunta a owner cuál antes de proceder. "
             "Si devuelve 0, díselo y pregunta el teléfono.\n\n"
             "Devuelve {found, count, items: [{id, name, phone, kind, notes}]}."
         ),
@@ -143,22 +152,22 @@ TOOLS: list[dict] = [
         "name": "create_task",
         "description": (
             "Crea una task agéntica con N destinatarios. Status inicial 'pending' — NO envía mensajes aún. "
-            "Después llama send_outbound para cada target (uno por uno), tras confirmación de OWNER.\n\n"
-            "Usa esto cuando OWNER te pide ejecutar una acción outbound (mandar mensajes, coordinar, invitar). "
-            "owner_id debe ser el contact_id de OWNER (lo tienes en el system block).\n\n"
+            "Después llama send_outbound para cada target (uno por uno), tras confirmación de owner.\n\n"
+            "Usa esto cuando owner te pide ejecutar una acción outbound (mandar mensajes, coordinar, invitar). "
+            "owner_id debe ser el contact_id de owner (lo tienes en el system block).\n\n"
             "kind: 'invitar' | 'coordinar_cita' | 'enviar_info' | 'recordatorio' | 'otro'.\n\n"
-            "**OBLIGATORIO:** pasa `expected_names` con los nombres EXACTOS que OWNER nombró, en el MISMO orden que target_contact_ids. "
+            "**OBLIGATORIO:** pasa `expected_names` con los nombres EXACTOS que owner nombró, en el MISMO orden que target_contact_ids. "
             "El server valida que cada contact_id corresponde a un contact.name que comparte palabras con expected_names[i]. "
-            "Si hay mismatch, el server REJECT la operación. Esto previene confundir contactos (ej. usar id de 'María' cuando OWNER dijo 'John').\n\n"
+            "Si hay mismatch, el server REJECT la operación. Esto previene confundir contactos (ej. usar id de 'María' cuando owner dijo 'José Luis').\n\n"
             "Devuelve {ok, task_id, target_count, targets: [{target_id, contact_id, contact_name, contact_phone}]}."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "owner_id": {"type": "integer", "description": "contact_id del owner (OWNER). Lo tienes en el system block."},
+                "owner_id": {"type": "integer", "description": "contact_id del owner (owner). Lo tienes en el system block."},
                 "kind": {"type": "string", "description": "Categoría de la task."},
-                "summary": {"type": "string", "description": "1-2 frases describiendo qué pidió OWNER."},
-                "raw_instruction": {"type": "string", "description": "Texto literal que OWNER dijo."},
+                "summary": {"type": "string", "description": "1-2 frases describiendo qué pidió owner."},
+                "raw_instruction": {"type": "string", "description": "Texto literal que owner dijo."},
                 "target_contact_ids": {
                     "type": "array",
                     "items": {"type": "integer"},
@@ -181,7 +190,7 @@ TOOLS: list[dict] = [
         "name": "send_outbound",
         "description": (
             "Envía mensaje al destinatario via WhatsApp y registra envío en task_targets. "
-            "REQUIERE que OWNER haya confirmado el plan antes de llamar esto.\n\n"
+            "REQUIERE que owner haya confirmado el plan antes de llamar esto.\n\n"
             "**IMPORTANTE — IDs:**\n"
             "- `task_id` viene del response de create_task ({task_id: N, ...}).\n"
             "- `target_id` viene del array `targets` de create_task: cada item tiene {target_id, contact_id, contact_name}. USA EL `target_id`, NO EL `contact_id`. Son distintos.\n\n"
@@ -202,17 +211,17 @@ TOOLS: list[dict] = [
     {
         "name": "report_to_owner",
         "description": (
-            "Manda un mensaje a OWNER en Telegram (NO en WhatsApp). Úsalo para reportar:\n"
+            "Manda un mensaje a owner en Telegram (NO en WhatsApp). Úsalo para reportar:\n"
             "- Plan listo, pidiendo confirmación.\n"
             "- Confirmaciones de envío exitoso.\n"
             "- Cuando un destinatario responde (en vivo, una respuesta a la vez).\n"
             "- Cuando una task se completa.\n\n"
-            "Mantén el reporte breve (1-3 líneas). Útil para mantener a OWNER al tanto sin spam."
+            "Mantén el reporte breve (1-3 líneas). Útil para mantener a owner al tanto sin spam."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "text": {"type": "string", "description": "El mensaje al chat de Telegram de OWNER."},
+                "text": {"type": "string", "description": "El mensaje al chat de Telegram de owner."},
                 "task_id": {"type": "integer", "description": "Opcional: contexto del task relacionado."},
             },
             "required": ["text"],
@@ -221,7 +230,7 @@ TOOLS: list[dict] = [
     {
         "name": "list_active_tasks",
         "description": (
-            "Lista tasks activas (no complete ni cancelled). Útil cuando OWNER pregunta "
+            "Lista tasks activas (no complete ni cancelled). Útil cuando owner pregunta "
             "'qué pendientes tengo' o 'qué estás coordinando'."
         ),
         "input_schema": {
@@ -236,7 +245,7 @@ TOOLS: list[dict] = [
     {
         "name": "update_task_status",
         "description": (
-            "Cambia el status de una task manualmente. Útil cuando OWNER dice 'cancela X' o "
+            "Cambia el status de una task manualmente. Útil cuando owner dice 'cancela X' o "
             "'ya terminé Y, márcala como completa'.\n\n"
             "Status válidos: pending | in_progress | awaiting_responses | complete | cancelled."
         ),
@@ -250,12 +259,81 @@ TOOLS: list[dict] = [
             "required": ["task_id", "status"],
         },
     },
+    # ============ TOOLS DE MEDIA (Phase 1c) ============
+    {
+        "name": "find_media",
+        "description": (
+            "Busca media (imágenes/PDFs) en el storage de Iris por label, tag o filename. "
+            "Úsalo ANTES de enviar imágenes en una task: 'manda la promo de ACLS' → find_media('ACLS promo').\n\n"
+            "Si devuelve 1 hit → úsalo. Si devuelve varios → preséntale a owner las opciones. "
+            "Si devuelve 0 → pregunta si subir URL (import_marketing_asset) o que owner la mande por Telegram.\n\n"
+            "Devuelve {found, count, items: [{id, label, source, mime_type, preview_url, use_count, ...}]}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Texto a buscar (label, tag, filename)."},
+                "limit": {"type": "integer", "description": "Máx items (default 5)."},
+                "source": {
+                    "type": "string",
+                    "enum": ["marketing", "ui_upload", "telegram", "whatsapp"],
+                    "description": "Opcional: filtra por fuente.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "import_marketing_asset",
+        "description": (
+            "Descarga una imagen desde una URL whitelisted (marketing.simacademy.lat, info.*, blog.*) "
+            "y la guarda como MediaAsset en Iris. Úsalo cuando owner te dé un link directo a una promo nueva.\n\n"
+            "Dedupe automático: si el archivo ya existe (sha256), devuelve el id existente con dedupe=true.\n\n"
+            "Devuelve {ok, asset_id, dedupe, label, source, preview_url} o {ok: false, error}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL whitelisted del asset (jpg/png/webp/pdf)."},
+                "label": {"type": "string", "description": "Nombre lógico ej 'Promo ACLS Verano 2026'."},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Tags ej ['acls','promo','simacademy'].",
+                },
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "send_outbound_media",
+        "description": (
+            "Envía una imagen al target via WhatsApp con caption opcional. Igual que send_outbound pero "
+            "con asset_id en vez de body de texto.\n\n"
+            "**REQUIERE confirmación previa de owner** (igual que send_outbound).\n\n"
+            "Personaliza el caption con tono Iris (cálido, español MX, breve). Caption max 1024 chars (límite WA).\n\n"
+            "task_id y target_id vienen de create_task — usa target_id (NO contact_id).\n"
+            "asset_id viene de find_media o import_marketing_asset.\n\n"
+            "Devuelve {ok, message_id, target_id, thread_id, asset_id} o {ok: false, error}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer"},
+                "target_id": {"type": "integer", "description": "target_id (no contact_id)."},
+                "asset_id": {"type": "integer", "description": "id del MediaAsset a enviar."},
+                "caption": {"type": "string", "description": "Caption opcional (max 1024 chars)."},
+            },
+            "required": ["task_id", "target_id", "asset_id"],
+        },
+    },
+    # ============ FIN TOOLS DE MEDIA ============
     # ============ FIN TOOLS AGÉNTICOS ============
     {
         "name": "open_ticket",
         "description": (
-            "Abre un ticket para que OWNER responda. Usar cuando Iris no puede resolver "
-            "(precio final, agenda, cuestiones clínicas, decisiones que requieren al owner)."
+            "Abre un ticket para que owner responda. Usar cuando Iris no puede resolver "
+            "(precio final, agenda, cuestiones clínicas, decisiones que requieren al doctor)."
         ),
         "input_schema": {
             "type": "object",
@@ -263,7 +341,7 @@ TOOLS: list[dict] = [
                 "thread_id": {"type": "integer"},
                 "kind": {"type": "string", "description": "Categoría libre: agenda, precio, clinico, asesoria, otro."},
                 "summary": {"type": "string", "description": "1-2 frases describiendo qué necesita el contacto."},
-                "draft_for_owner": {"type": "string", "description": "Mensaje sugerido para que OWNER apruebe/edite antes de relay."},
+                "draft_for_owner": {"type": "string", "description": "Mensaje sugerido para que owner apruebe/edite antes de relay."},
             },
             "required": ["thread_id", "kind", "summary"],
         },
@@ -376,7 +454,7 @@ def _open_ticket(thread_id: int, kind: str, summary: str, draft_for_owner: str |
             kind=kind,
             summary=summary,
             draft_for_owner=draft_for_owner,
-            status=TicketStatus.awaiting_owner,
+            status=TicketStatus.awaiting_jmf,
         )
         s.add(t)
         s.flush()
@@ -433,6 +511,29 @@ def execute(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if name == "update_task_status":
             from . import agentic
             return agentic.update_task_status(int(args["task_id"]), args["status"], args.get("note"))
+        # ----- media tools (Phase 1c) -----
+        if name == "find_media":
+            from . import agentic
+            return agentic.find_media(
+                args["query"],
+                limit=int(args.get("limit", 5)),
+                source=args.get("source"),
+            )
+        if name == "import_marketing_asset":
+            from . import agentic
+            return agentic.import_marketing_asset(
+                args["url"],
+                label=args.get("label"),
+                tags=args.get("tags"),
+            )
+        if name == "send_outbound_media":
+            from . import agentic
+            return agentic.send_outbound_media(
+                int(args["task_id"]),
+                int(args["target_id"]),
+                int(args["asset_id"]),
+                caption=args.get("caption"),
+            )
     except Exception as e:
         log.exception("tool %s failed", name)
         return {"error": str(e)}

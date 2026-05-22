@@ -288,7 +288,19 @@ class TelegramRelay:
         if chat_id is None:
             return
 
-        # 1. Reply-to-bot nativo → forward al brain como respuesta OWNER
+        # 0. Phase 1c — Ingesta de media del owner por Telegram.
+        # Si vino una foto o documento de imagen y el caption matchea "guarda como X",
+        # descarga el blob de Telegram y manda al brain /media/upload.
+        if self._is_owner_chat(chat_id) and (message.get("photo") or message.get("document")):
+            if self._looks_like_ingest_caption(body):
+                try:
+                    self._handle_owner_media_ingest(chat_id, message, body)
+                except Exception:  # noqa: BLE001
+                    log.exception("owner media ingest failed")
+                    self.telegram.send_message(chat_id, "❌ No pude guardar la imagen (revisa logs del brain).")
+                return
+
+        # 1. Reply-to-bot nativo → forward al brain como respuesta owner
         reply_to = message.get("reply_to_message")
         if reply_to:
             reply_to_msg_id = reply_to.get("message_id")
@@ -316,12 +328,115 @@ class TelegramRelay:
             self._send_owner_reply(chat_id, row, body)
             return
 
-        # 4. Sin contexto → asumir instrucción agéntica de OWNER (Phase 1b).
+        # 4. Sin contexto → asumir instrucción agéntica de owner (Phase 1b).
         # Cualquier texto libre que no sea comando ni reply se envía a brain /owner/instruct.
         self._forward_owner_instruction(chat_id, body)
 
+    # --- Phase 1c — owner media ingest ---------------------------------
+
+    _INGEST_CAPTION_RE = __import__("re").compile(
+        r"^\s*(?:guarda|guardar|save)\s+(?:como|as)\s+(?P<label>.+?)\s*$",
+        flags=__import__("re").IGNORECASE,
+    )
+    _TAG_RE = __import__("re").compile(r"#(\w+)")
+
+    def _is_owner_chat(self, chat_id: int) -> bool:
+        owner_id = self.settings.telegram_chat_id
+        try:
+            return str(chat_id) == str(owner_id)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _looks_like_ingest_caption(self, text: str) -> bool:
+        if not text:
+            return False
+        stripped = self._TAG_RE.sub("", text).strip()
+        return bool(self._INGEST_CAPTION_RE.match(stripped))
+
+    def _parse_ingest_caption(self, text: str) -> tuple[str | None, list[str]]:
+        if not text:
+            return None, []
+        tags = self._TAG_RE.findall(text)
+        stripped = self._TAG_RE.sub("", text).strip()
+        m = self._INGEST_CAPTION_RE.match(stripped)
+        if not m:
+            return None, tags
+        return m.group("label").strip(), tags
+
+    def _telegram_get_file(self, file_id: str) -> dict[str, Any]:
+        url = f"{self.settings.telegram_api_base}/getFile"
+        r = self.telegram.http.post(url, json={"file_id": file_id}, timeout=self.settings.http_timeout)
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"getFile failed: {data}")
+        return data["result"]
+
+    def _telegram_download(self, file_path: str) -> bytes:
+        token = self.settings.telegram_bot_token
+        url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+        r = self.telegram.http.get(url, timeout=self.settings.http_timeout * 2)
+        r.raise_for_status()
+        return r.content
+
+    def _handle_owner_media_ingest(self, chat_id: int, message: dict[str, Any], caption: str) -> None:
+        # Tomar la mejor resolución para fotos, o el documento (si es imagen).
+        file_id: str | None = None
+        mime: str | None = None
+        filename: str | None = None
+        if message.get("photo"):
+            photos = message["photo"]
+            best = photos[-1]
+            file_id = best.get("file_id")
+            mime = "image/jpeg"  # Telegram convierte fotos a jpeg
+            filename = f"telegram-{message.get('message_id', 'photo')}.jpg"
+        elif message.get("document"):
+            doc = message["document"]
+            mime = (doc.get("mime_type") or "").lower()
+            if mime not in {"image/jpeg", "image/png", "image/webp", "application/pdf"}:
+                self.telegram.send_message(chat_id, f"❌ Tipo {mime} no soportado (solo jpg/png/webp/pdf).")
+                return
+            file_id = doc.get("file_id")
+            filename = doc.get("file_name") or f"telegram-{message.get('message_id', 'doc')}"
+        if not file_id:
+            return
+
+        # 1. getFile → file_path
+        info = self._telegram_get_file(file_id)
+        file_path = info.get("file_path")
+        if not file_path:
+            self.telegram.send_message(chat_id, "❌ Telegram no devolvió file_path.")
+            return
+        # 2. Download blob
+        blob = self._telegram_download(file_path)
+        # 3. Parse label + tags
+        label, tags = self._parse_ingest_caption(caption)
+        # 4. POST a brain /media/upload
+        import json as _json
+        files = {"file": (filename, blob, mime)}
+        data: dict[str, str] = {"source": "telegram"}
+        if label:
+            data["label"] = label
+        if tags:
+            data["tags"] = _json.dumps(tags)
+        url = f"{self.settings.brain_url.rstrip('/')}/media/upload"
+        try:
+            r = self.telegram.http.post(url, files=files, data=data, timeout=30.0)
+            r.raise_for_status()
+            res = r.json()
+        except Exception as e:  # noqa: BLE001
+            log.exception("brain /media/upload failed")
+            self.telegram.send_message(chat_id, f"❌ Error subiendo al brain: {e}")
+            return
+        dedupe = " (dedupe)" if res.get("dedupe") else ""
+        self.telegram.send_message(
+            chat_id,
+            f"📸 Guardada como '<b>{label or res.get('filename')}</b>' "
+            f"(id={res['id']}, source=telegram{dedupe}) ✓",
+        )
+
     def _forward_owner_instruction(self, chat_id: int, body: str) -> None:
-        """Forwarda instrucción libre de OWNER al brain /owner/instruct."""
+        """Forwarda instrucción libre de owner al brain /owner/instruct."""
         try:
             url = f"{self.settings.brain_url.rstrip('/')}/owner/instruct"
             r = self.brain.http.post(url, json={"text": body, "source": "telegram"}, timeout=60.0)
@@ -335,7 +450,7 @@ class TelegramRelay:
         self.telegram.send_message(chat_id, reply)
 
     def _send_owner_reply(self, chat_id: int, row: Any, body: str) -> None:
-        """Envía la respuesta de OWNER al brain y actualiza el mensaje del bot."""
+        """Envía la respuesta de owner al brain y actualiza el mensaje del bot."""
         try:
             self.brain.owner_reply(row.ticket_id, body)
             self.state.set_status(row.ticket_id, "closed")
@@ -344,7 +459,7 @@ class TelegramRelay:
             )
             self.telegram.send_message(chat_id, f"✅ Respuesta enviada al paciente (ticket #{row.ticket_id}).")
         except Exception as e:  # noqa: BLE001
-            log.exception("Failed forwarding OWNER reply for ticket %s", row.ticket_id)
+            log.exception("Failed forwarding owner reply for ticket %s", row.ticket_id)
             self.telegram.send_message(chat_id, f"❌ Falló enviar la respuesta del ticket #{row.ticket_id}: {e}")
 
     def _handle_command(self, chat_id: int, body: str) -> None:
@@ -392,7 +507,7 @@ class TelegramRelay:
             self.telegram.send_message(chat_id, f"No pude obtener tickets: {e}")
             return
         groups = data.get("groups") or {}
-        # Mostrar TODOS los activos (no solo awaiting_owner): open + awaiting_owner + awaiting_patient.
+        # Mostrar TODOS los activos (no solo awaiting_jmf): open + awaiting_jmf + awaiting_patient.
         active_statuses = [("awaiting_owner", "⏳ Esperan tu respuesta"), ("open", "🆕 Recién creados"), ("awaiting_patient", "📤 Esperan al paciente")]
         active_total = sum(len(groups.get(s, [])) for s, _ in active_statuses)
         if active_total == 0:
@@ -463,10 +578,10 @@ class TelegramRelay:
         msg = (
             f"<b>🎫 Tickets activos</b>\n\n"
             f"• Open: {counts.get('open', 0)}\n"
-            f"• Esperando tu respuesta: {counts.get('awaiting_owner', 0)}\n"
+            f"• Esperando tu respuesta: {counts.get('awaiting_jmf', 0)}\n"
             f"• Esperando paciente: {counts.get('awaiting_patient', 0)}\n"
             f"• Cerrados hoy: {counts.get('closed', 0)}\n\n"
-            f"<b>Detalle de awaiting_owner:</b>\n"
+            f"<b>Detalle de awaiting_jmf:</b>\n"
         )
         pending = groups.get("awaiting_owner", [])
         if not pending:

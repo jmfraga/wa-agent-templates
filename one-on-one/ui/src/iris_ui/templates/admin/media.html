@@ -1,0 +1,92 @@
+{% extends "admin/_layout.html" %}
+{% block admin_title %}Media — biblioteca de imágenes{% endblock %}
+{% block admin_content %}
+<section class="space-y-6 max-w-6xl">
+  <header>
+    <h1 class="text-xl font-semibold text-slate-900">📸 Media</h1>
+    <p class="text-sm text-slate-500">
+      Biblioteca de imágenes que Iris puede mandar en tareas agénticas
+      (promos, flyers, capturas). 3 fuentes: marketing URL, upload directo, ingesta Telegram/WA.
+    </p>
+  </header>
+
+  {% if brain_offline %}
+  <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 text-amber-900">
+    Brain no responde — la lista podría estar desactualizada.
+  </div>
+  {% endif %}
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    {# Drag-drop upload #}
+    <div class="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
+      <h2 class="text-sm font-semibold text-slate-700 mb-2">📤 Subir archivo</h2>
+      <form hx-post="/admin/media/upload"
+            hx-encoding="multipart/form-data"
+            hx-target="#upload-result"
+            hx-swap="innerHTML"
+            class="space-y-2">
+        <input type="file" name="file" required accept="image/jpeg,image/png,image/webp,application/pdf"
+               class="w-full text-sm" />
+        <input type="text" name="label" placeholder="Etiqueta (ej. 'Promo ACLS Verano 2026')"
+               class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
+        <input type="text" name="tags" placeholder="Tags coma-separados (ej. acls,promo,simacademy)"
+               class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
+        <button type="submit" class="bg-slate-900 text-white text-sm rounded-md px-4 py-1.5 hover:bg-slate-700">
+          Subir
+        </button>
+      </form>
+      <div id="upload-result" class="text-xs mt-2"></div>
+      <p class="text-xs text-slate-400 mt-2">jpg/png/webp/pdf · max 10 MB</p>
+    </div>
+
+    {# Import URL #}
+    <div class="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
+      <h2 class="text-sm font-semibold text-slate-700 mb-2">🔗 Importar URL (marketing)</h2>
+      <form hx-post="/admin/media/ingest-url"
+            hx-target="#ingest-result"
+            hx-swap="innerHTML"
+            class="space-y-2">
+        <input type="url" name="url" required
+               placeholder="https://marketing.simacademy.lat/eusim2/promo.jpg"
+               class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono" />
+        <input type="text" name="label" placeholder="Etiqueta"
+               class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
+        <input type="text" name="tags" placeholder="Tags coma-separados"
+               class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
+        <button type="submit" class="bg-slate-900 text-white text-sm rounded-md px-4 py-1.5 hover:bg-slate-700">
+          Importar
+        </button>
+      </form>
+      <div id="ingest-result" class="text-xs mt-2"></div>
+      <p class="text-xs text-slate-400 mt-2">
+        Dominios permitidos: marketing.simacademy.lat, info.simacademy.lat, info.emergencias.com.mx,
+        blog.simacademy.lat, blog.emergencias.com.mx
+      </p>
+    </div>
+  </div>
+
+  {# Filtros #}
+  <form method="get" class="flex items-center gap-2">
+    <input type="text" name="q" value="{{ q }}" placeholder="Buscar por label / tag / filename"
+           class="border border-slate-300 rounded-md px-3 py-1.5 text-sm flex-1 max-w-md" />
+    <select name="source" class="border border-slate-300 rounded-md px-2 py-1.5 text-sm bg-white">
+      <option value="" {% if not source %}selected{% endif %}>Todas las fuentes</option>
+      <option value="marketing" {% if source == 'marketing' %}selected{% endif %}>marketing</option>
+      <option value="ui_upload" {% if source == 'ui_upload' %}selected{% endif %}>ui_upload</option>
+      <option value="telegram" {% if source == 'telegram' %}selected{% endif %}>telegram</option>
+      <option value="whatsapp" {% if source == 'whatsapp' %}selected{% endif %}>whatsapp</option>
+    </select>
+    <button type="submit" class="bg-slate-100 text-slate-700 text-sm rounded-md px-3 py-1.5 hover:bg-slate-200">
+      Filtrar
+    </button>
+    {% if q or source %}
+    <a href="/admin/media" class="text-xs text-slate-500 underline">Limpiar</a>
+    {% endif %}
+  </form>
+
+  {# Grid #}
+  <div id="media-grid">
+    {% include "admin/_partials/media_grid.html" %}
+  </div>
+</section>
+{% endblock %}

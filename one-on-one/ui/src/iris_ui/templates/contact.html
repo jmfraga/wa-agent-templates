@@ -66,10 +66,19 @@
         <li class="flex {% if m.direction == 'out' %}justify-end{% endif %}">
           <div class="max-w-md rounded-lg px-3 py-2 text-sm
                       {% if m.direction == 'out' %}bg-slate-900 text-white{% else %}bg-slate-100 text-slate-800{% endif %}">
+            {% if m.media_asset_id %}
+            <img src="/media/{{ m.media_asset_id }}" alt="media"
+                 class="rounded-md mb-2 max-h-64 object-contain bg-white" />
+            {% if m.media_caption %}
+            <div class="whitespace-pre-wrap text-xs italic opacity-90">{{ m.media_caption }}</div>
+            {% endif %}
+            {% else %}
             <div class="whitespace-pre-wrap">{{ m.body }}</div>
+            {% endif %}
             <div class="text-[10px] mt-1 opacity-60">
               {{ m.ts or m.created_at }}
               {% if m.model_used == 'manual_override' %} · 👤 manual{% endif %}
+              {% if m.model_used == 'agentic_outbound_media' %} · 📸 media{% endif %}
             </div>
           </div>
         </li>

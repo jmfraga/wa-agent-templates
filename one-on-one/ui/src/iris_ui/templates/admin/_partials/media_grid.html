@@ -1,0 +1,56 @@
+{% if items %}
+<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+  {% for m in items %}
+  <div class="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+    <div class="aspect-video bg-slate-100 flex items-center justify-center overflow-hidden">
+      {% if m.mime_type and m.mime_type.startswith('image/') %}
+      <img src="/media/{{ m.id }}" alt="{{ m.label or m.filename }}"
+           class="w-full h-full object-contain" loading="lazy" />
+      {% else %}
+      <div class="text-slate-400 text-sm">📄 {{ m.mime_type }}</div>
+      {% endif %}
+    </div>
+    <div class="p-3 space-y-1">
+      <div class="font-medium text-sm text-slate-800 truncate" title="{{ m.label or m.filename }}">
+        {{ m.label or m.filename }}
+      </div>
+      <div class="flex items-center gap-2 text-xs">
+        <span class="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-slate-700">
+          {{ m.source }}
+        </span>
+        <span class="text-slate-400">#{{ m.id }}</span>
+        {% if m.use_count and m.use_count > 0 %}
+        <span class="text-slate-500">· enviada {{ m.use_count }}×</span>
+        {% endif %}
+      </div>
+      {% if m.tags %}
+      <div class="flex flex-wrap gap-1 text-xs">
+        {% for t in m.tags %}
+        <span class="inline-flex items-center rounded-md bg-slate-50 border border-slate-200 px-1.5 py-0.5 text-slate-600">#{{ t }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="text-xs text-slate-400">
+        {{ m.created_at[:19] if m.created_at else '' }}
+      </div>
+      <div class="flex items-center justify-between pt-2 border-t border-slate-100 mt-2">
+        <a href="/media/{{ m.id }}" target="_blank" class="text-xs text-slate-600 underline hover:text-slate-900">
+          Ver
+        </a>
+        <button hx-delete="/admin/media/{{ m.id }}"
+                hx-confirm="¿Borrar este media? (soft-delete, archivo se borra pero queda historial)"
+                hx-target="closest div.bg-white"
+                hx-swap="outerHTML"
+                class="text-xs text-rose-600 hover:text-rose-800 underline">
+          🗑 Borrar
+        </button>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="bg-white border border-dashed border-slate-300 rounded-lg p-8 text-center">
+  <p class="text-slate-400 text-sm">Sin media. Sube un archivo o importa una URL para empezar.</p>
+</div>
+{% endif %}
