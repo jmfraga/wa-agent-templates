@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -98,7 +98,7 @@ class ChatRequest(BaseModel):
     real_phone: str | None = None
 
 
-class OwnerReplyRequest(BaseModel):
+class JMFReplyRequest(BaseModel):
     ticket_id: int
     body: str
 
@@ -123,7 +123,7 @@ def health() -> dict[str, Any]:
         "model_safety": settings.IRIS_BRAIN_MODEL_SAFETY,
         "port": settings.IRIS_BRAIN_PORT,
         "soul_size": len(soul.soul_text()),
-        "relay_configured": bool(settings.OWNER_RELAY_WEBHOOK),
+        "relay_configured": bool(settings.JMF_RELAY_WEBHOOK),
         "contact_relay_configured": bool(settings.CONTACT_RELAY_WEBHOOK),
     }
 
@@ -303,13 +303,34 @@ def patch_task(task_id: int, req: TaskPatchRequest) -> dict[str, Any]:
 
 
 @app.post("/tasks/{task_id}/execute")
-def execute_task_endpoint(task_id: int) -> dict[str, Any]:
+def execute_task_endpoint(task_id: int, force: bool = False) -> dict[str, Any]:
     """Ejecuta una task pending (envía a todos los targets pending).
+
+    Si la task tiene `scheduled_at` futuro y `force=false`, devuelve 409 con info
+    de la fecha programada. Pasa `?force=true` para anular el schedule.
 
     Usa task.context.asset_id+caption si presente (send_outbound_media),
     si no usa task.context.message_template (send_outbound).
     """
     from . import agentic
+    from .models import Task
+
+    if not force:
+        with get_session() as s:
+            t = s.get(Task, task_id)
+            if t is None:
+                raise HTTPException(404, "task no existe")
+            if t.scheduled_at is not None:
+                now = datetime.now(timezone.utc)
+                sched = t.scheduled_at
+                if sched.tzinfo is None:
+                    sched = sched.replace(tzinfo=timezone.utc)
+                if sched > now:
+                    raise HTTPException(
+                        409,
+                        f"task #{task_id} está programada para {sched.isoformat()} "
+                        f"— no se ejecuta hasta esa fecha (usa ?force=true para anular).",
+                    )
     r = agentic.execute_task(task_id)
     if not r.get("ok") and r.get("error") and r.get("sent", 0) == 0 and r.get("failed", 0) == 0:
         # Error duro (no targets, sin template, task no existe)
@@ -427,19 +448,19 @@ def owner_instruct(req: OwnerInstructRequest) -> dict[str, Any]:
     return {**result, "source": req.source}
 
 
-@app.post("/owner/reply")
-def owner_reply(req: OwnerReplyRequest) -> dict[str, Any]:
+@app.post("/jmf/reply")
+def jmf_reply(req: JMFReplyRequest) -> dict[str, Any]:
     """Owner responde a un ticket; mandamos la respuesta al contacto vía relay."""
     with get_session() as s:
         t = s.get(Ticket, req.ticket_id)
         if t is None:
             raise HTTPException(404, "ticket no existe")
-        t.owner_response = req.body
+        t.jmf_response = req.body
         t.status = TicketStatus.awaiting_patient
         thread_id = t.thread_id
     relay_result = get_relay().send_to_contact(thread_id, req.body)
     # Persistir la salida en messages también.
-    sessions.append_message(thread_id, MessageDirection.out, req.body, model_used="owner_manual")
+    sessions.append_message(thread_id, MessageDirection.out, req.body, model_used="jmf_manual")
     return {"ok": True, "ticket_id": req.ticket_id, "relay": relay_result}
 
 
@@ -451,7 +472,7 @@ def _ticket_dict(t: Ticket) -> dict[str, Any]:
         "summary": t.summary,
         "status": t.status.value,
         "draft_for_jmf": t.draft_for_jmf,
-        "owner_response": t.owner_response,
+        "jmf_response": t.jmf_response,
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,
     }
@@ -1162,8 +1183,8 @@ def admin_tickets_live(since: str | None = None) -> dict[str, Any]:
 
 @app.post("/admin/tickets/{ticket_id}/reply", dependencies=[Depends(require_admin)])
 def admin_ticket_reply(ticket_id: int, req: TicketReplyRequest) -> dict[str, Any]:
-    """Wrap de /owner/reply con close_after opcional."""
-    result = owner_reply(OwnerReplyRequest(ticket_id=ticket_id, body=req.body))
+    """Wrap de /jmf/reply con close_after opcional."""
+    result = jmf_reply(JMFReplyRequest(ticket_id=ticket_id, body=req.body))
     if req.close_after:
         try:
             admin_mod.close_ticket(ticket_id)

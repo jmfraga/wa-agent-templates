@@ -375,8 +375,14 @@ def send_outbound_media(
     target_id: int,
     asset_id: int,
     caption: str | None = None,
+    body_text: str | None = None,
 ) -> dict[str, Any]:
-    """Envía imagen al target via wa-listener, persiste en messages con media_asset_id."""
+    """Envía imagen al target via wa-listener, persiste en messages con media_asset_id.
+
+    Si body_text viene, el wa-listener manda primero el texto y luego la imagen.
+    Caption puede ser corto y separado del body (ej. "¡Promo ACLS!" como caption +
+    body con saludo personalizado y link de inscripción).
+    """
     from . import media as media_mod
 
     with get_session() as s:
@@ -416,7 +422,7 @@ def send_outbound_media(
     # POST a wa-listener (payload extendido con media)
     wa_url = (settings.CONTACT_RELAY_WEBHOOK or "http://localhost:8099/send-to-contact")
     media_url = f"{settings.MEDIA_INTERNAL_URL.rstrip('/')}/media/{asset_id}/raw"
-    payload = {
+    payload: dict[str, Any] = {
         "type": "outbound_media",
         "phone": phone,
         "thread_id": thread_id,
@@ -426,6 +432,8 @@ def send_outbound_media(
             "caption": caption,
         },
     }
+    if body_text:
+        payload["body"] = body_text[:4096]  # límite de seguridad
     try:
         with httpx.Client(timeout=20) as client:
             r = client.post(wa_url, json=payload)
@@ -449,7 +457,16 @@ def send_outbound_media(
 
     # Persistir message + actualizar task_target
     now = datetime.now(timezone.utc)
-    body_for_record = caption or f"[imagen: {asset_label}]"
+    # Si hubo body_text (texto previo a la imagen), regístralo como mensaje aparte
+    if body_text:
+        with get_session() as s:
+            s.add(Message(
+                thread_id=thread_id,
+                direction=MessageDirection.out,
+                body=body_text,
+                model_used="agentic_outbound_media_text",
+            ))
+    body_for_record = caption or body_text or f"[imagen: {asset_label}]"
     with get_session() as s:
         m = Message(
             thread_id=thread_id,
@@ -462,7 +479,7 @@ def send_outbound_media(
         s.add(m)
         tt2 = s.get(TaskTarget, target_id)
         if tt2 is not None:
-            tt2.message_sent = body_for_record
+            tt2.message_sent = (body_text + " | " + (caption or "")) if body_text else body_for_record
             tt2.message_sent_at = now
             tt2.thread_id = thread_id
             tt2.status = "sent"
@@ -640,7 +657,15 @@ def execute_task(task_id: int) -> dict[str, Any]:
                     render_message_template(caption, spec["contact_name"], spec["contact_phone"])
                     if caption else None
                 )
-                r = send_outbound_media(task_id, spec["target_id"], int(asset_id), caption=rendered_caption)
+                # Si también vino message_template, va como texto previo a la imagen
+                rendered_body = (
+                    render_message_template(message_template, spec["contact_name"], spec["contact_phone"])
+                    if message_template else None
+                )
+                r = send_outbound_media(
+                    task_id, spec["target_id"], int(asset_id),
+                    caption=rendered_caption, body_text=rendered_body,
+                )
             else:
                 body = render_message_template(message_template, spec["contact_name"], spec["contact_phone"])
                 r = send_outbound(task_id, spec["target_id"], body)

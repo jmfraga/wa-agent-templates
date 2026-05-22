@@ -204,12 +204,17 @@ async function handleSendToContact(
   try {
     let sent;
     if (hasMedia && payload.media) {
-      // Phase 1c: imagen outbound. Baileys descarga `url` internamente y la envía
-      // como imageMessage con caption opcional.
-      const caption = payload.media.caption ?? payload.body ?? '';
+      // Phase 1c.fix: si vienen body Y media, mandamos PRIMERO el texto (con su URL preview)
+      // y DESPUÉS la imagen. Caption de la imagen = payload.media.caption (opcional, corto).
+      // Si solo viene media → un solo sendMessage con caption.
+      const hasBody = !!(payload.body && payload.body.trim());
+      const imgCaption = payload.media.caption ?? (hasBody ? undefined : payload.body) ?? undefined;
+      if (hasBody) {
+        await state.sock.sendMessage(jid, { text: payload.body as string });
+      }
       sent = await state.sock.sendMessage(jid, {
         image: { url: payload.media.url },
-        caption: caption || undefined,
+        caption: imgCaption || undefined,
       });
       const messageId = sent?.key?.id ?? undefined;
       log.info(
@@ -218,9 +223,10 @@ async function handleSendToContact(
           thread_id: payload.thread_id,
           message_id: messageId,
           media_url: payload.media.url,
-          caption_len: caption.length,
+          body_len: hasBody ? (payload.body as string).length : 0,
+          caption_len: (imgCaption || '').length,
         },
-        'send-to-contact (media) ok',
+        'send-to-contact (text+media) ok',
       );
       return sendJson(res, 200, {
         ok: true,
