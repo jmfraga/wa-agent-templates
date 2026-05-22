@@ -11,13 +11,14 @@
  *
  * Sprint 2: además expone un HTTP server (puerto WA_LISTENER_PORT, default
  * 8099) con `POST /send-to-contact` para que el brain pueda entregar
- * respuestas async de owner al paciente sin pasar por el flujo síncrono.
+ * respuestas async de Owner al paciente sin pasar por el flujo síncrono.
  */
 
 import 'dotenv/config';
 import { Boom } from '@hapi/boom';
 import makeWASocket, {
   DisconnectReason,
+  downloadMediaMessage,
   useMultiFileAuthState,
   type WAMessage,
   type proto,
@@ -40,8 +41,39 @@ const BRAIN_URL = process.env.BRAIN_URL ?? 'http://localhost:8096';
 const AUTH_DIR = process.env.AUTH_DIR ?? './auth/listener';
 const LOG_LEVEL = process.env.LOG_LEVEL ?? 'info';
 const WA_LISTENER_PORT = parseInt(process.env.WA_LISTENER_PORT ?? '8099', 10);
+const OWNER_PHONES_ENV = process.env.OWNER_PHONES ?? '';
 
 const log = pino({ level: LOG_LEVEL, name: 'iris-wa-listener' });
+
+// Set de phones del owner (dígitos puros, sin '+'). Se siembra del env y se
+// refresca cada 5 min consultando al brain /contacts?kind=owner.
+const OWNER_PHONES = new Set<string>(
+  OWNER_PHONES_ENV.split(',').map((p) => p.replace(/[^\d]/g, '')).filter(Boolean),
+);
+
+async function refreshOwnerPhones(): Promise<void> {
+  try {
+    const res = await fetch(`${BRAIN_URL}/contacts?kind=owner&limit=10&page_size=10`);
+    if (!res.ok) {
+      log.warn({ status: res.status }, 'owner phones refresh: non-2xx');
+      return;
+    }
+    const data = (await res.json()) as { items?: Array<{ phone?: string }> };
+    const items = data?.items ?? [];
+    for (const it of items) {
+      const digits = (it.phone || '').replace(/[^\d]/g, '');
+      if (digits) OWNER_PHONES.add(digits);
+    }
+    log.info({ count: OWNER_PHONES.size }, 'owner phones refreshed');
+  } catch (err) {
+    log.warn({ err }, 'failed to refresh owner phones');
+  }
+}
+
+function isOwnerPhone(phone: string): boolean {
+  const digits = phone.replace(/[^\d]/g, '');
+  return OWNER_PHONES.has(digits);
+}
 
 /**
  * Estado compartido entre el listener Baileys y el HTTP server.
@@ -349,6 +381,74 @@ async function startListener(): Promise<void> {
       if (!text && !mediaHint) continue;
 
       const contact_phone = jidToPhone(jid);
+
+      // ─── Phase 1c — Owner media ingest por WA ───────────────────────
+      // Si quien manda es el owner Y trae imagen (imageMessage o documentMessage image/*),
+      // descargamos el blob vía Baileys y lo subimos a brain /media/upload.
+      // No pasamos por brain /chat para este flujo (evita dead code).
+      const imageMsg = m.message?.imageMessage;
+      const docMsg = m.message?.documentMessage;
+      const docIsImage = !!(docMsg && (docMsg.mimetype || '').startsWith('image/'));
+      const hasIngestableMedia = !!imageMsg || docIsImage;
+
+      if (hasIngestableMedia && isOwnerPhone(contact_phone)) {
+        try {
+          const buffer = (await downloadMediaMessage(
+            m,
+            'buffer',
+            {},
+            {
+              logger: log as never,
+              reuploadRequest: sock.updateMediaMessage,
+            },
+          )) as Buffer;
+
+          const mime = imageMsg
+            ? 'image/jpeg'
+            : (docMsg?.mimetype || 'application/octet-stream');
+          const caption =
+            imageMsg?.caption ?? docMsg?.caption ?? '';
+          const filename = imageMsg
+            ? `wa-${m.key.id ?? 'image'}.jpg`
+            : (docMsg?.fileName || `wa-${m.key.id ?? 'doc'}`);
+
+          // Construir multipart manual con boundary.
+          const FormData = (await import('form-data')).default;
+          const form = new FormData();
+          form.append('file', buffer, { filename, contentType: mime });
+          form.append('source', 'whatsapp');
+          if (caption) form.append('label', caption.slice(0, 200));
+
+          const res = await fetch(`${BRAIN_URL}/media/upload`, {
+            method: 'POST',
+            body: form as unknown as NodeJS.ReadableStream,
+            headers: form.getHeaders(),
+          });
+          if (!res.ok) {
+            const errText = await res.text();
+            log.error({ status: res.status, errText, contact_phone }, 'owner WA media upload failed');
+            await sock.sendMessage(jid, { text: `❌ No pude guardar la imagen: brain ${res.status}` });
+            continue;
+          }
+          const out = (await res.json()) as { id: number; label?: string; dedupe?: boolean };
+          const dedupe = out.dedupe ? ', dedupe' : '';
+          const label = out.label || caption || filename;
+          await sock.sendMessage(jid, {
+            text: `📸 Guardada como '${label}' (id=${out.id}, source=whatsapp${dedupe}) ✓`,
+          });
+          log.info({ id: out.id, label, contact_phone }, 'owner WA media ingested');
+          continue;
+        } catch (err) {
+          log.error({ err, contact_phone }, 'owner WA media ingest failed');
+          try {
+            await sock.sendMessage(jid, { text: `❌ No pude guardar la imagen: ${(err as Error)?.message ?? err}` });
+          } catch (sendErr) {
+            log.error({ sendErr }, 'failed to notify owner of ingest error');
+          }
+          continue;
+        }
+      }
+
       // Recordar el JID original para responder con el suffix correcto (@lid vs @s.whatsapp.net)
       const bareDigits = contact_phone.replace(/[^\d]/g, '');
       PHONE_TO_JID.set(bareDigits, jid);
@@ -409,6 +509,12 @@ async function startListener(): Promise<void> {
 // HTTP server arranca de inmediato — responderá 503 hasta que `sock` esté
 // conectado. Permite que el brain detecte estado vía /health.
 startHttpServer();
+
+// Sembrar owner phones del brain al arranque y refrescar cada 5 min.
+refreshOwnerPhones().catch((err) => log.warn({ err }, 'initial owner refresh failed'));
+setInterval(() => {
+  refreshOwnerPhones().catch((err) => log.warn({ err }, 'periodic owner refresh failed'));
+}, 5 * 60 * 1000);
 
 startListener().catch((err) => {
   log.error({ err }, 'fatal');

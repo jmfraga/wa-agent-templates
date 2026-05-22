@@ -6,8 +6,8 @@ Pipeline:
   3. Insertar message in
   4. classify_intent (Haiku)
   5. Si urgencia_clinica → detect_crisis (Sonnet)
-  6. Si crisis → respuesta inmediata + ping owner urgente
-  7. Si intent requiere owner → open_ticket + respuesta puente
+  6. Si crisis → respuesta inmediata + ping Owner urgente
+  7. Si intent requiere Owner → open_ticket + respuesta puente
   8. Si info_curso → consulta kb_facts; si hay, responde; si no, ticket
   9. Otros → respuesta directa con SOUL via Haiku + tool-use loop (max 5)
 """
@@ -28,7 +28,7 @@ log = logging.getLogger("iris_brain.chat")
 
 MAX_TOOL_ITERATIONS = 5
 
-# Intents que siempre escalan a owner.
+# Intents que siempre escalan a Owner.
 ESCALATE_INTENTS = {"consulta_cita", "info_asesoria", "seguimiento_paciente", "pago_facturacion"}
 
 _client: anthropic.Anthropic | None = None
@@ -63,7 +63,7 @@ def _system_blocks(contact_id: int | None = None, thread_id: int | None = None) 
         ]
         if thread_id is not None:
             lines.insert(1, f"- **thread_id: {thread_id}** (úsalo SIEMPRE así en open_ticket, NO uses el phone)")
-        # contact_id es necesario para tools agentic cuando owner habla (owner_id en create_task).
+        # contact_id es necesario para tools agentic cuando Owner habla (owner_id en create_task).
         lines.insert(1, f"- **contact_id: {c.id}** (úsalo como owner_id en create_task si eres modo owner)")
         if not c.name:
             lines.append(
@@ -200,7 +200,7 @@ def handle_message(
     model_used = settings.IRIS_BRAIN_MODEL_DEFAULT
     cphone, cname = _contact_card(contact_id)
 
-    # 3.5 Modo owner — owner dicta instrucciones (agéntico). Bypass safety + intent classify.
+    # 3.5 Modo owner — Owner dicta instrucciones (agéntico). Bypass safety + intent classify.
     # Iris responde con tools agentic (search_contacts, create_task, send_outbound, etc).
     contact_kind = None
     with get_session() as s:
@@ -208,45 +208,10 @@ def handle_message(
         if c is not None:
             contact_kind = c.kind.value if c.kind else None
     if contact_kind == "owner":
-        # Phase 1c — Ingesta WA owner: si manda foto con caption 'guarda como X',
-        # persistimos el asset y respondemos confirmación, sin pasar al flujo agéntico.
-        if media_url and media_url.startswith("http"):
-            from . import media as media_mod
-            if media_mod.looks_like_ingest_caption(text):
-                label, tags = media_mod.parse_ingest_caption(text)
-                try:
-                    r = media_mod.ingest_from_url(
-                        media_url,
-                        label=label,
-                        tags=tags,
-                        source="whatsapp",
-                        uploaded_by_contact_id=contact_id,
-                        enforce_whitelist=False,
-                    )
-                    dedupe = r.get("dedupe", False)
-                    reply = (
-                        f"📸 Guardada como '{label}' (id={r['id']}, source=whatsapp"
-                        + (", dedupe" if dedupe else "") + ") ✓"
-                    )
-                except media_mod.MediaError as e:
-                    reply = f"❌ No pude guardar la imagen: {e}"
-                except Exception as e:  # noqa: BLE001
-                    log.exception("owner WA media ingest failed")
-                    reply = f"❌ Error guardando la imagen: {e}"
-                sessions.append_message(
-                    thread_id, MessageDirection.out, reply, model_used="owner_media_ingest",
-                )
-                return {
-                    "ok": True,
-                    "thread_id": thread_id,
-                    "contact_id": contact_id,
-                    "intent": "owner_media_ingest",
-                    "intent_confidence": 1.0,
-                    "safety": None,
-                    "ticket_id": None,
-                    "reply": reply,
-                    "model": "owner_media_ingest",
-                }
+        # Nota: la ingesta de media del owner por WhatsApp se hace ahora en el
+        # wa-listener (descarga el blob vía Baileys y lo sube a /media/upload).
+        # Telegram tiene su propio path en relay-bot. Por eso aquí ya no hay
+        # branch de ingesta WA-owner.
         intent = "owner_instruction"
         intent_confidence = 1.0
         msgs = list(history)
@@ -290,15 +255,15 @@ def handle_message(
             thread_id,
             kind="urgencia" if is_high else "posible_urgencia",
             summary=f"{'🚨 ' if is_high else ''}{crisis.category.upper()} [{crisis.level}]: {text[:180]}",
-            draft_for_owner=f"Match: '{crisis.matched}'\n\nTexto del paciente:\n{text}",
+            draft_for_jmf=f"Match: '{crisis.matched}'\n\nTexto del paciente:\n{text}",
         )
         ticket_id = tid.get("ticket_id")
-        get_relay().send_to_owner({
+        get_relay().send_to_jmf({
             "id": ticket_id,
             "thread_id": thread_id,
             "kind": "urgencia" if is_high else "posible_urgencia",
             "summary": f"{crisis.category} [{crisis.level}]",
-            "draft_for_owner": f"Match keyword: '{crisis.matched}'\nNivel: {crisis.level}\n\nTexto:\n{text}",
+            "draft_for_jmf": f"Match keyword: '{crisis.matched}'\nNivel: {crisis.level}\n\nTexto:\n{text}",
             "urgent": is_high,
             "contact_phone": cphone,
             "contact_name": cname,
@@ -326,7 +291,7 @@ def handle_message(
     if active_tt is not None:
         cls = agentic.classify_response(active_tt["message_sent"] or "", text)
         agentic.classify_and_record_response(active_tt["id"], text, cls["classification"])
-        # Reportar a owner en vivo
+        # Reportar a Owner en vivo
         emoji = {
             "accepted": "✅", "declined": "❌", "maybe": "🤔",
             "clarify": "❓", "other": "💬",
@@ -372,7 +337,7 @@ def handle_message(
     intent_confidence = intent_result["confidence"]
     log.info("intent=%s conf=%.2f phone=%s", intent, intent_confidence, contact_phone)
 
-    # 7. Intents que escalan a owner: abrimos ticket programáticamente y
+    # 7. Intents que escalan a Owner: abrimos ticket programáticamente y
     # dejamos que Iris genere una respuesta personalizada usando el contexto.
     usage_out: dict | None = None
     if intent in ESCALATE_INTENTS:
@@ -380,15 +345,15 @@ def handle_message(
             thread_id,
             kind=intent,
             summary=text[:200],
-            draft_for_owner=None,
+            draft_for_jmf=None,
         )
         ticket_id = tid.get("ticket_id")
-        get_relay().send_to_owner({
+        get_relay().send_to_jmf({
             "id": ticket_id,
             "thread_id": thread_id,
             "kind": intent,
             "summary": text[:200],
-            "draft_for_owner": None,
+            "draft_for_jmf": None,
             "urgent": False,
             "contact_phone": cphone,
             "contact_name": cname,
@@ -403,7 +368,7 @@ def handle_message(
                 "content": (
                     f"{msgs[-1]['content']}\n\n"
                     f"[nota interna del sistema, NO la repitas: ya abrí el ticket #{ticket_id} "
-                    f"de tipo {intent} con owner. Solo responde al paciente con una frase puente "
+                    f"de tipo {intent} con Owner. Solo responde al paciente con una frase puente "
                     f"breve (1-2 líneas), personalizada con su nombre si lo sabes, en tono cálido "
                     f"de Iris. Ejemplos: 'Gracias {{nombre}}, déjame checar con el doctor', "
                     f"'Va, paso el contexto al Dr. Fraga y te confirmo en cuanto sepa', etc. Varía.]"
@@ -420,7 +385,7 @@ def handle_message(
                 thread_id,
                 kind="info_curso",
                 summary=text[:200],
-                draft_for_owner=None,
+                draft_for_jmf=None,
             )
             ticket_id = tid.get("ticket_id")
             reply = reply or "Déjame confirmar los detalles con el doctor y te aviso en cuanto sepa."
