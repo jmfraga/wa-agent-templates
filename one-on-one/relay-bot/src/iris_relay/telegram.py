@@ -107,15 +107,15 @@ class TelegramClient:
 
 
 class BrainClient:
-    """HTTP client for the Iris brain (POST /owner/reply, POST /tickets/{id}/close, etc.)."""
+    """HTTP client for the Iris brain (POST /jmf/reply, POST /tickets/{id}/close, etc.)."""
 
     def __init__(self, settings: Settings, http: Optional[requests.Session] = None):
         self.settings = settings
         self.http = http or requests.Session()
         self.timeout = settings.http_timeout
 
-    def owner_reply(self, ticket_id: int, body: str) -> dict[str, Any]:
-        url = f"{self.settings.brain_url.rstrip('/')}/owner/reply"
+    def jmf_reply(self, ticket_id: int, body: str) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/jmf/reply"
         r = self.http.post(url, json={"ticket_id": ticket_id, "body": body}, timeout=self.timeout)
         r.raise_for_status()
         return r.json() if r.content else {}
@@ -186,7 +186,7 @@ class TelegramRelay:
             message_id=int(message_id),
             thread_id=payload.get("thread_id"),
             kind=payload.get("kind"),
-            status="awaiting_owner",
+            status="awaiting_jmf",
         )
         if payload.get("draft"):
             self._draft_cache[ticket_id] = payload["draft"]
@@ -248,7 +248,7 @@ class TelegramRelay:
                 if not draft:
                     self.telegram.answer_callback_query(cb_id, "Sin plantilla en caché")
                     return
-                self.brain.owner_reply(ticket_id, draft)
+                self.brain.jmf_reply(ticket_id, draft)
                 self.state.set_status(ticket_id, "closed")
                 self.telegram.edit_message_text(chat_id, message_id, render_approved(ticket_id, draft))
                 self.telegram.answer_callback_query(cb_id, "Enviado")
@@ -289,25 +289,25 @@ class TelegramRelay:
             return
 
         # 0. Phase 1c — Ingesta de media del owner por Telegram.
-        # Si vino una foto o documento de imagen y el caption matchea "guarda como X",
-        # descarga el blob de Telegram y manda al brain /media/upload.
+        # Cualquier foto/documento del owner se ingiere automáticamente; el caption
+        # define el label (regex "guarda como X" prevalece; si no, caption completo
+        # sin hashtags; si no hay caption, label automático con fecha).
         if self._is_owner_chat(chat_id) and (message.get("photo") or message.get("document")):
-            if self._looks_like_ingest_caption(body):
-                try:
-                    self._handle_owner_media_ingest(chat_id, message, body)
-                except Exception:  # noqa: BLE001
-                    log.exception("owner media ingest failed")
-                    self.telegram.send_message(chat_id, "❌ No pude guardar la imagen (revisa logs del brain).")
-                return
+            try:
+                self._handle_owner_media_ingest(chat_id, message, body)
+            except Exception:  # noqa: BLE001
+                log.exception("owner media ingest failed")
+                self.telegram.send_message(chat_id, "❌ No pude guardar la imagen (revisa logs del brain).")
+            return
 
-        # 1. Reply-to-bot nativo → forward al brain como respuesta owner
+        # 1. Reply-to-bot nativo → forward al brain como respuesta Owner
         reply_to = message.get("reply_to_message")
         if reply_to:
             reply_to_msg_id = reply_to.get("message_id")
             if reply_to_msg_id is not None:
                 row = self.state.find_by_message(int(chat_id), int(reply_to_msg_id))
                 if row is not None and body:
-                    self._send_owner_reply(chat_id, row, body)
+                    self._send_jmf_reply(chat_id, row, body)
                     return
 
         # 2. Comandos
@@ -325,10 +325,10 @@ class TelegramRelay:
         # 3. Texto plano → si hay ticket awaiting_reply (✍️ Responder fue tocado), envíalo ahí
         row = self.state.find_awaiting_reply(int(chat_id))
         if row is not None:
-            self._send_owner_reply(chat_id, row, body)
+            self._send_jmf_reply(chat_id, row, body)
             return
 
-        # 4. Sin contexto → asumir instrucción agéntica de owner (Phase 1b).
+        # 4. Sin contexto → asumir instrucción agéntica de Owner (Phase 1b).
         # Cualquier texto libre que no sea comando ni reply se envía a brain /owner/instruct.
         self._forward_owner_instruction(chat_id, body)
 
@@ -353,15 +353,22 @@ class TelegramRelay:
         stripped = self._TAG_RE.sub("", text).strip()
         return bool(self._INGEST_CAPTION_RE.match(stripped))
 
-    def _parse_ingest_caption(self, text: str) -> tuple[str | None, list[str]]:
-        if not text:
-            return None, []
-        tags = self._TAG_RE.findall(text)
-        stripped = self._TAG_RE.sub("", text).strip()
-        m = self._INGEST_CAPTION_RE.match(stripped)
-        if not m:
-            return None, tags
-        return m.group("label").strip(), tags
+    def _parse_ingest_caption(self, text: str) -> tuple[str, list[str]]:
+        """Devuelve (label, tags). Reglas:
+        - Si caption matchea 'guarda como X' → label = X.
+        - Si caption tiene texto pero no matchea → label = caption sin hashtags.
+        - Si no hay caption útil → label autogenerado con fecha/hora.
+        """
+        from datetime import datetime as _dt
+
+        tags = self._TAG_RE.findall(text) if text else []
+        stripped = self._TAG_RE.sub("", text or "").strip()
+        if stripped:
+            m = self._INGEST_CAPTION_RE.match(stripped)
+            if m:
+                return m.group("label").strip(), tags
+            return stripped, tags
+        return f"Foto Telegram {_dt.now():%Y-%m-%d %H:%M}", tags
 
     def _telegram_get_file(self, file_id: str) -> dict[str, Any]:
         url = f"{self.settings.telegram_api_base}/getFile"
@@ -409,14 +416,12 @@ class TelegramRelay:
             return
         # 2. Download blob
         blob = self._telegram_download(file_path)
-        # 3. Parse label + tags
+        # 3. Parse label + tags (label SIEMPRE viene non-empty con las nuevas reglas)
         label, tags = self._parse_ingest_caption(caption)
         # 4. POST a brain /media/upload
         import json as _json
         files = {"file": (filename, blob, mime)}
-        data: dict[str, str] = {"source": "telegram"}
-        if label:
-            data["label"] = label
+        data: dict[str, str] = {"source": "telegram", "label": label}
         if tags:
             data["tags"] = _json.dumps(tags)
         url = f"{self.settings.brain_url.rstrip('/')}/media/upload"
@@ -428,15 +433,15 @@ class TelegramRelay:
             log.exception("brain /media/upload failed")
             self.telegram.send_message(chat_id, f"❌ Error subiendo al brain: {e}")
             return
-        dedupe = " (dedupe)" if res.get("dedupe") else ""
+        dedupe = ", dedupe" if res.get("dedupe") else ""
         self.telegram.send_message(
             chat_id,
-            f"📸 Guardada como '<b>{label or res.get('filename')}</b>' "
+            f"📸 Guardada como '<b>{label}</b>' "
             f"(id={res['id']}, source=telegram{dedupe}) ✓",
         )
 
     def _forward_owner_instruction(self, chat_id: int, body: str) -> None:
-        """Forwarda instrucción libre de owner al brain /owner/instruct."""
+        """Forwarda instrucción libre de Owner al brain /owner/instruct."""
         try:
             url = f"{self.settings.brain_url.rstrip('/')}/owner/instruct"
             r = self.brain.http.post(url, json={"text": body, "source": "telegram"}, timeout=60.0)
@@ -449,17 +454,17 @@ class TelegramRelay:
         reply = data.get("reply") or "(sin respuesta del brain)"
         self.telegram.send_message(chat_id, reply)
 
-    def _send_owner_reply(self, chat_id: int, row: Any, body: str) -> None:
-        """Envía la respuesta de owner al brain y actualiza el mensaje del bot."""
+    def _send_jmf_reply(self, chat_id: int, row: Any, body: str) -> None:
+        """Envía la respuesta de Owner al brain y actualiza el mensaje del bot."""
         try:
-            self.brain.owner_reply(row.ticket_id, body)
+            self.brain.jmf_reply(row.ticket_id, body)
             self.state.set_status(row.ticket_id, "closed")
             self.telegram.edit_message_text(
                 chat_id, row.message_id, render_reply_sent(row.ticket_id, body)
             )
             self.telegram.send_message(chat_id, f"✅ Respuesta enviada al paciente (ticket #{row.ticket_id}).")
         except Exception as e:  # noqa: BLE001
-            log.exception("Failed forwarding owner reply for ticket %s", row.ticket_id)
+            log.exception("Failed forwarding Owner reply for ticket %s", row.ticket_id)
             self.telegram.send_message(chat_id, f"❌ Falló enviar la respuesta del ticket #{row.ticket_id}: {e}")
 
     def _handle_command(self, chat_id: int, body: str) -> None:
@@ -508,7 +513,7 @@ class TelegramRelay:
             return
         groups = data.get("groups") or {}
         # Mostrar TODOS los activos (no solo awaiting_jmf): open + awaiting_jmf + awaiting_patient.
-        active_statuses = [("awaiting_owner", "⏳ Esperan tu respuesta"), ("open", "🆕 Recién creados"), ("awaiting_patient", "📤 Esperan al paciente")]
+        active_statuses = [("awaiting_jmf", "⏳ Esperan tu respuesta"), ("open", "🆕 Recién creados"), ("awaiting_patient", "📤 Esperan al paciente")]
         active_total = sum(len(groups.get(s, [])) for s, _ in active_statuses)
         if active_total == 0:
             self.telegram.send_message(chat_id, "✅ No hay tickets activos en este momento.")
@@ -538,15 +543,15 @@ class TelegramRelay:
                     "thread_id": t.get("thread_id"),
                     "kind": t.get("kind"),
                     "summary": t.get("summary"),
-                    "draft": t.get("draft_for_owner"),
+                    "draft": t.get("draft_for_jmf"),
                     "contact_name": t.get("contact_name"),
                     "contact_phone": t.get("contact_phone"),
                     "urgent": t.get("kind") == "urgencia",
                 }
                 text = render_ticket_message(payload)
                 # Para awaiting_patient: indicar que el paciente ya recibió respuesta.
-                if status_key == "awaiting_patient" and t.get("owner_response"):
-                    text += f"\n\n<i>Tu última respuesta:</i>\n<blockquote>{_esc(t['owner_response'][:300])}</blockquote>"
+                if status_key == "awaiting_patient" and t.get("jmf_response"):
+                    text += f"\n\n<i>Tu última respuesta:</i>\n<blockquote>{_esc(t['jmf_response'][:300])}</blockquote>"
                 markup = build_inline_keyboard(payload)
                 sent = self.telegram.send_message(chat_id, text, reply_markup=markup)
                 try:
@@ -583,7 +588,7 @@ class TelegramRelay:
             f"• Cerrados hoy: {counts.get('closed', 0)}\n\n"
             f"<b>Detalle de awaiting_jmf:</b>\n"
         )
-        pending = groups.get("awaiting_owner", [])
+        pending = groups.get("awaiting_jmf", [])
         if not pending:
             msg += "  (ninguno)"
         else:
