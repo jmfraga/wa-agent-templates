@@ -16,6 +16,23 @@
   </div>
   {% endif %}
 
+  <style>
+    /* HTMX indicator: visible solo durante hx-request, oculto en reposo */
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline-flex; }
+    .htmx-request.htmx-indicator { display: inline-flex; }
+    /* Spinner CSS puro */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid currentColor; border-right-color: transparent;
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+      vertical-align: -3px; margin-right: 6px;
+    }
+    /* Form disabled mientras está en request — bloquea doble submit */
+    form.htmx-request fieldset { opacity: 0.5; pointer-events: none; }
+  </style>
+
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     {# Drag-drop upload #}
     <div class="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
@@ -24,16 +41,23 @@
             hx-encoding="multipart/form-data"
             hx-target="#upload-result"
             hx-swap="innerHTML"
+            hx-disabled-elt="find button"
+            hx-indicator="this"
             class="space-y-2">
+        <fieldset class="space-y-2 border-0 p-0 m-0">
         <input type="file" name="file" required accept="image/jpeg,image/png,image/webp,application/pdf"
                class="w-full text-sm" />
         <input type="text" name="label" placeholder="Etiqueta (ej. 'Promo ACLS Verano 2026')"
                class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
         <input type="text" name="tags" placeholder="Tags coma-separados (ej. acls,promo,simacademy)"
                class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
-        <button type="submit" class="bg-slate-900 text-white text-sm rounded-md px-4 py-1.5 hover:bg-slate-700">
-          Subir
+        <button type="submit"
+                class="bg-slate-900 text-white text-sm rounded-md px-4 py-1.5 hover:bg-slate-700 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center">
+          <span class="htmx-indicator spinner"></span>
+          <span class="htmx-indicator">Subiendo…</span>
+          <span class="[.htmx-request_&]:hidden">Subir</span>
         </button>
+        </fieldset>
       </form>
       <div id="upload-result" class="text-xs mt-2"></div>
       <p class="text-xs text-slate-400 mt-2">jpg/png/webp/pdf · max 10 MB</p>
@@ -45,7 +69,10 @@
       <form hx-post="/admin/media/ingest-url"
             hx-target="#ingest-result"
             hx-swap="innerHTML"
+            hx-disabled-elt="find button"
+            hx-indicator="this"
             class="space-y-2">
+        <fieldset class="space-y-2 border-0 p-0 m-0">
         <input type="url" name="url" required
                placeholder="https://marketing.simacademy.lat/eusim2/promo.jpg"
                class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono" />
@@ -53,9 +80,13 @@
                class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
         <input type="text" name="tags" placeholder="Tags coma-separados"
                class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
-        <button type="submit" class="bg-slate-900 text-white text-sm rounded-md px-4 py-1.5 hover:bg-slate-700">
-          Importar
+        <button type="submit"
+                class="bg-slate-900 text-white text-sm rounded-md px-4 py-1.5 hover:bg-slate-700 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center">
+          <span class="htmx-indicator spinner"></span>
+          <span class="htmx-indicator">Importando…</span>
+          <span class="[.htmx-request_&]:hidden">Importar</span>
         </button>
+        </fieldset>
       </form>
       <div id="ingest-result" class="text-xs mt-2"></div>
       <p class="text-xs text-slate-400 mt-2">
