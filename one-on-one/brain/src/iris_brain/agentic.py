@@ -4,7 +4,7 @@ Funciones de soporte para los tools agentic_*. La capa de tools en tools.py
 las llama y devuelve resultados a Anthropic SDK.
 
 Decisiones congeladas:
-- Confirmación explícita: Iris construye plan, owner aprueba, ENTONCES se envía.
+- Confirmación explícita: Iris construye plan, Owner aprueba, ENTONCES se envía.
 - Canal de instrucción: Telegram (POST a relay-bot endpoint).
 - Reportes en vivo: ping a Telegram cada vez que un target responde.
 - Send is final: WhatsApp no permite unsend reliable post-segundos.
@@ -70,7 +70,7 @@ def create_task(
 ) -> dict[str, Any]:
     """Crea task + N task_targets en status='pending'.
 
-    No envía mensajes — eso lo hace send_outbound después de la confirmación de owner.
+    No envía mensajes — eso lo hace send_outbound después de la confirmación de Owner.
 
     Guardrails:
     - owner_id NUNCA puede estar en target_contact_ids (Iris no debe escribirle al owner).
@@ -141,7 +141,7 @@ def create_task(
                         "ok": False,
                         "error": (
                             f"No encontré ningún contacto que matchee con '{expected}'. "
-                            f"Pídele a owner el teléfono específico o varía el nombre."
+                            f"Pídele a Owner el teléfono específico o varía el nombre."
                         ),
                     }
                 if len(candidates) > 1:
@@ -150,7 +150,7 @@ def create_task(
                         "ok": False,
                         "error": (
                             f"Encontré {len(candidates)} candidatos para '{expected}': {options}. "
-                            f"Pídele a owner que elija o re-busca con criterio más específico (apellido completo, etc)."
+                            f"Pídele a Owner que elija o re-busca con criterio más específico (apellido completo, etc)."
                         ),
                     }
                 # Único match — usar y registrar la corrección
@@ -199,7 +199,7 @@ def create_task(
             result["auto_corrections"] = auto_corrections
             result["warning"] = (
                 "Hubo correcciones automáticas — algunos contact_id que pasaste no coincidían con expected_names. "
-                "El server resolvió por nombre. REVISA targets[] antes de continuar y avísale a owner en tu reporte de plan."
+                "El server resolvió por nombre. REVISA targets[] antes de continuar y avísale a Owner en tu reporte de plan."
             )
         return result
 
@@ -492,7 +492,7 @@ def send_outbound_media(
 # --- Owner reporting --------------------------------------------------------
 
 def report_to_owner(text: str, task_id: int | None = None) -> dict[str, Any]:
-    """Manda mensaje a owner en Telegram via la API directa.
+    """Manda mensaje a Owner en Telegram via la API directa.
 
     No usa el relay-bot HTTP (sería circular). Va directo a Telegram bot API.
     """
@@ -575,6 +575,123 @@ def send_all_pending(task_id: int, message_template: str) -> dict[str, Any]:
         "failed": failed_count,
         "results": results,
     }
+
+
+def execute_task(task_id: int) -> dict[str, Any]:
+    """Ejecuta una task pending: envía a todos los task_targets pending.
+
+    Si task.context tiene `asset_id` (int) → usa send_outbound_media con
+    context.caption como caption. Si no, usa send_outbound con
+    context.message_template como body. Si tampoco hay template, falla con error.
+
+    Después del envío masivo actualiza task.status:
+      - todos sent → 'awaiting_responses' (send_outbound ya lo hace, pero
+        si no había template/asset y nada se envió, dejamos 'pending').
+      - parciales → 'in_progress'.
+      - 0 enviados → 'pending' sin cambios.
+
+    Devuelve {ok, sent, failed, errors, status}.
+    """
+    with get_session() as s:
+        task = s.get(Task, task_id)
+        if task is None:
+            return {"ok": False, "error": "task no existe"}
+        ctx = task.context or {}
+        asset_id = ctx.get("asset_id")
+        caption = ctx.get("caption")
+        message_template = ctx.get("message_template")
+        # Cargamos specs de targets pending para no mantener sesión abierta
+        targets = list(
+            s.scalars(
+                select(TaskTarget).where(
+                    TaskTarget.task_id == task_id, TaskTarget.status == "pending"
+                )
+            )
+        )
+        specs: list[dict] = []
+        for tt in targets:
+            c = s.get(Contact, tt.contact_id)
+            specs.append({
+                "target_id": tt.id,
+                "contact_id": tt.contact_id,
+                "contact_name": c.name if c else None,
+                "contact_phone": c.phone if c else "",
+            })
+
+    if not specs:
+        return {"ok": False, "error": "no hay targets pending", "sent": 0, "failed": 0}
+
+    if not asset_id and not message_template:
+        return {
+            "ok": False,
+            "error": "task.context no tiene asset_id ni message_template — no se puede ejecutar",
+            "sent": 0,
+            "failed": 0,
+        }
+
+    sent = 0
+    failed = 0
+    errors: list[dict] = []
+    for spec in specs:
+        try:
+            if asset_id:
+                # Caption opcional, render placeholders sobre nombre del target
+                rendered_caption = (
+                    render_message_template(caption, spec["contact_name"], spec["contact_phone"])
+                    if caption else None
+                )
+                r = send_outbound_media(task_id, spec["target_id"], int(asset_id), caption=rendered_caption)
+            else:
+                body = render_message_template(message_template, spec["contact_name"], spec["contact_phone"])
+                r = send_outbound(task_id, spec["target_id"], body)
+        except Exception as e:  # noqa: BLE001
+            log.exception("execute_task: target_id=%s falló", spec["target_id"])
+            failed += 1
+            errors.append({"target_id": spec["target_id"], "error": str(e)})
+            continue
+        if r.get("ok"):
+            sent += 1
+        else:
+            failed += 1
+            errors.append({"target_id": spec["target_id"], "error": r.get("error", "unknown")})
+
+    # Update task status final
+    with get_session() as s:
+        t = s.get(Task, task_id)
+        if t is not None and t.status not in ("complete", "cancelled"):
+            if failed == 0 and sent > 0:
+                # send_outbound[_media] ya pone awaiting_responses si no quedan pending;
+                # respetamos lo que dejaron.
+                pass
+            elif sent > 0 and failed > 0:
+                t.status = "in_progress"
+        final_status = t.status if t else None
+
+    return {
+        "ok": failed == 0,
+        "sent": sent,
+        "failed": failed,
+        "errors": errors,
+        "status": final_status,
+        "task_id": task_id,
+    }
+
+
+def list_due_scheduled_task_ids(limit: int = 20) -> list[int]:
+    """Devuelve ids de tasks pending con scheduled_at <= now() (worker)."""
+    from sqlalchemy import func as sa_func
+    with get_session() as s:
+        stmt = (
+            select(Task.id)
+            .where(
+                Task.status == "pending",
+                Task.scheduled_at.is_not(None),
+                Task.scheduled_at <= sa_func.now(),
+            )
+            .order_by(Task.scheduled_at)
+            .limit(limit)
+        )
+        return list(s.scalars(stmt))
 
 
 def classify_response(message_sent: str, response_text: str, anthropic_client=None) -> dict[str, Any]:

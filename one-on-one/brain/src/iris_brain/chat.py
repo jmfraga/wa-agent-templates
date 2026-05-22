@@ -26,7 +26,7 @@ from .relay import get_relay
 
 log = logging.getLogger("iris_brain.chat")
 
-MAX_TOOL_ITERATIONS = 5
+MAX_TOOL_ITERATIONS = 12  # subido para flows owner agénticos (find_media + search_contacts + create_task + N send_outbound[_media] + report_to_owner)
 
 # Intents que siempre escalan a Owner.
 ESCALATE_INTENTS = {"consulta_cita", "info_asesoria", "seguimiento_paciente", "pago_facturacion"}

@@ -122,7 +122,7 @@ TOOLS: list[dict] = [
                     ),
                 },
                 "notes_append": {"type": "string", "description": "Nota corta a sumar a las existentes."},
-                "notes_replace": {"type": "string", "description": "Reemplaza completamente las notas. Úsalo solo si owner lo pide."},
+                "notes_replace": {"type": "string", "description": "Reemplaza completamente las notas. Úsalo solo si Owner lo pide."},
             },
             "required": ["phone"],
         },
@@ -132,9 +132,9 @@ TOOLS: list[dict] = [
         "name": "search_contacts",
         "description": (
             "Busca contactos en el directorio por nombre, teléfono o notas (fuzzy ILIKE). "
-            "Úsalo cuando owner te pida hacer algo con una persona y solo te dé su nombre o referencia parcial. "
+            "Úsalo cuando Owner te pida hacer algo con una persona y solo te dé su nombre o referencia parcial. "
             "Ej: 'manda mensaje a Roberto' → search_contacts('Roberto'). "
-            "Si devuelve varios resultados, pregunta a owner cuál antes de proceder. "
+            "Si devuelve varios resultados, pregunta a Owner cuál antes de proceder. "
             "Si devuelve 0, díselo y pregunta el teléfono.\n\n"
             "Devuelve {found, count, items: [{id, name, phone, kind, notes}]}."
         ),
@@ -152,22 +152,22 @@ TOOLS: list[dict] = [
         "name": "create_task",
         "description": (
             "Crea una task agéntica con N destinatarios. Status inicial 'pending' — NO envía mensajes aún. "
-            "Después llama send_outbound para cada target (uno por uno), tras confirmación de owner.\n\n"
-            "Usa esto cuando owner te pide ejecutar una acción outbound (mandar mensajes, coordinar, invitar). "
-            "owner_id debe ser el contact_id de owner (lo tienes en el system block).\n\n"
+            "Después llama send_outbound para cada target (uno por uno), tras confirmación de Owner.\n\n"
+            "Usa esto cuando Owner te pide ejecutar una acción outbound (mandar mensajes, coordinar, invitar). "
+            "owner_id debe ser el contact_id de Owner (lo tienes en el system block).\n\n"
             "kind: 'invitar' | 'coordinar_cita' | 'enviar_info' | 'recordatorio' | 'otro'.\n\n"
-            "**OBLIGATORIO:** pasa `expected_names` con los nombres EXACTOS que owner nombró, en el MISMO orden que target_contact_ids. "
+            "**OBLIGATORIO:** pasa `expected_names` con los nombres EXACTOS que Owner nombró, en el MISMO orden que target_contact_ids. "
             "El server valida que cada contact_id corresponde a un contact.name que comparte palabras con expected_names[i]. "
-            "Si hay mismatch, el server REJECT la operación. Esto previene confundir contactos (ej. usar id de 'María' cuando owner dijo 'José Luis').\n\n"
+            "Si hay mismatch, el server REJECT la operación. Esto previene confundir contactos (ej. usar id de 'María' cuando Owner dijo 'José Luis').\n\n"
             "Devuelve {ok, task_id, target_count, targets: [{target_id, contact_id, contact_name, contact_phone}]}."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "owner_id": {"type": "integer", "description": "contact_id del owner (owner). Lo tienes en el system block."},
+                "owner_id": {"type": "integer", "description": "contact_id del owner (Owner). Lo tienes en el system block."},
                 "kind": {"type": "string", "description": "Categoría de la task."},
-                "summary": {"type": "string", "description": "1-2 frases describiendo qué pidió owner."},
-                "raw_instruction": {"type": "string", "description": "Texto literal que owner dijo."},
+                "summary": {"type": "string", "description": "1-2 frases describiendo qué pidió Owner."},
+                "raw_instruction": {"type": "string", "description": "Texto literal que Owner dijo."},
                 "target_contact_ids": {
                     "type": "array",
                     "items": {"type": "integer"},
@@ -180,7 +180,19 @@ TOOLS: list[dict] = [
                 },
                 "context": {
                     "type": "object",
-                    "description": "Metadata libre: {lugar, fecha_propuesta, hora, etc}.",
+                    "description": "Metadata libre: {lugar, fecha_propuesta, hora, etc}. Si la task involucra media o un mensaje template, USA mejor los campos `asset_id`/`caption`/`message_template` de abajo — el server los persiste en context para que el executor pueda dispararlos sin volver a pedir confirmación.",
+                },
+                "asset_id": {
+                    "type": "integer",
+                    "description": "OPCIONAL: id del MediaAsset (de find_media o import_marketing_asset). Si lo pasas, queda guardado en task.context.asset_id y send_outbound_media puede dispararse desde el executor (botón 'Ejecutar ahora' o scheduler).",
+                },
+                "caption": {
+                    "type": "string",
+                    "description": "OPCIONAL: caption asociado al asset_id. Se persiste en task.context.caption. Max 1024 chars. Acepta placeholders {{name}}, {{first_name}}.",
+                },
+                "message_template": {
+                    "type": "string",
+                    "description": "OPCIONAL: cuerpo del mensaje de texto (sin asset). Acepta placeholders {{name}}, {{first_name}}, {{phone}}. Se persiste en task.context.message_template para que el executor pueda enviarlo.",
                 },
             },
             "required": ["owner_id", "kind", "summary", "target_contact_ids", "expected_names"],
@@ -190,7 +202,7 @@ TOOLS: list[dict] = [
         "name": "send_outbound",
         "description": (
             "Envía mensaje al destinatario via WhatsApp y registra envío en task_targets. "
-            "REQUIERE que owner haya confirmado el plan antes de llamar esto.\n\n"
+            "REQUIERE que Owner haya confirmado el plan antes de llamar esto.\n\n"
             "**IMPORTANTE — IDs:**\n"
             "- `task_id` viene del response de create_task ({task_id: N, ...}).\n"
             "- `target_id` viene del array `targets` de create_task: cada item tiene {target_id, contact_id, contact_name}. USA EL `target_id`, NO EL `contact_id`. Son distintos.\n\n"
@@ -211,17 +223,17 @@ TOOLS: list[dict] = [
     {
         "name": "report_to_owner",
         "description": (
-            "Manda un mensaje a owner en Telegram (NO en WhatsApp). Úsalo para reportar:\n"
+            "Manda un mensaje a Owner en Telegram (NO en WhatsApp). Úsalo para reportar:\n"
             "- Plan listo, pidiendo confirmación.\n"
             "- Confirmaciones de envío exitoso.\n"
             "- Cuando un destinatario responde (en vivo, una respuesta a la vez).\n"
             "- Cuando una task se completa.\n\n"
-            "Mantén el reporte breve (1-3 líneas). Útil para mantener a owner al tanto sin spam."
+            "Mantén el reporte breve (1-3 líneas). Útil para mantener a Owner al tanto sin spam."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "text": {"type": "string", "description": "El mensaje al chat de Telegram de owner."},
+                "text": {"type": "string", "description": "El mensaje al chat de Telegram de Owner."},
                 "task_id": {"type": "integer", "description": "Opcional: contexto del task relacionado."},
             },
             "required": ["text"],
@@ -230,7 +242,7 @@ TOOLS: list[dict] = [
     {
         "name": "list_active_tasks",
         "description": (
-            "Lista tasks activas (no complete ni cancelled). Útil cuando owner pregunta "
+            "Lista tasks activas (no complete ni cancelled). Útil cuando Owner pregunta "
             "'qué pendientes tengo' o 'qué estás coordinando'."
         ),
         "input_schema": {
@@ -245,7 +257,7 @@ TOOLS: list[dict] = [
     {
         "name": "update_task_status",
         "description": (
-            "Cambia el status de una task manualmente. Útil cuando owner dice 'cancela X' o "
+            "Cambia el status de una task manualmente. Útil cuando Owner dice 'cancela X' o "
             "'ya terminé Y, márcala como completa'.\n\n"
             "Status válidos: pending | in_progress | awaiting_responses | complete | cancelled."
         ),
@@ -265,8 +277,8 @@ TOOLS: list[dict] = [
         "description": (
             "Busca media (imágenes/PDFs) en el storage de Iris por label, tag o filename. "
             "Úsalo ANTES de enviar imágenes en una task: 'manda la promo de ACLS' → find_media('ACLS promo').\n\n"
-            "Si devuelve 1 hit → úsalo. Si devuelve varios → preséntale a owner las opciones. "
-            "Si devuelve 0 → pregunta si subir URL (import_marketing_asset) o que owner la mande por Telegram.\n\n"
+            "Si devuelve 1 hit → úsalo. Si devuelve varios → preséntale a Owner las opciones. "
+            "Si devuelve 0 → pregunta si subir URL (import_marketing_asset) o que Owner la mande por Telegram.\n\n"
             "Devuelve {found, count, items: [{id, label, source, mime_type, preview_url, use_count, ...}]}."
         ),
         "input_schema": {
@@ -287,7 +299,7 @@ TOOLS: list[dict] = [
         "name": "import_marketing_asset",
         "description": (
             "Descarga una imagen desde una URL whitelisted (marketing.simacademy.lat, info.*, blog.*) "
-            "y la guarda como MediaAsset en Iris. Úsalo cuando owner te dé un link directo a una promo nueva.\n\n"
+            "y la guarda como MediaAsset en Iris. Úsalo cuando Owner te dé un link directo a una promo nueva.\n\n"
             "Dedupe automático: si el archivo ya existe (sha256), devuelve el id existente con dedupe=true.\n\n"
             "Devuelve {ok, asset_id, dedupe, label, source, preview_url} o {ok: false, error}."
         ),
@@ -310,7 +322,7 @@ TOOLS: list[dict] = [
         "description": (
             "Envía una imagen al target via WhatsApp con caption opcional. Igual que send_outbound pero "
             "con asset_id en vez de body de texto.\n\n"
-            "**REQUIERE confirmación previa de owner** (igual que send_outbound).\n\n"
+            "**REQUIERE confirmación previa de Owner** (igual que send_outbound).\n\n"
             "Personaliza el caption con tono Iris (cálido, español MX, breve). Caption max 1024 chars (límite WA).\n\n"
             "task_id y target_id vienen de create_task — usa target_id (NO contact_id).\n"
             "asset_id viene de find_media o import_marketing_asset.\n\n"
@@ -332,7 +344,7 @@ TOOLS: list[dict] = [
     {
         "name": "open_ticket",
         "description": (
-            "Abre un ticket para que owner responda. Usar cuando Iris no puede resolver "
+            "Abre un ticket para que Owner responda. Usar cuando Iris no puede resolver "
             "(precio final, agenda, cuestiones clínicas, decisiones que requieren al doctor)."
         ),
         "input_schema": {
@@ -341,7 +353,7 @@ TOOLS: list[dict] = [
                 "thread_id": {"type": "integer"},
                 "kind": {"type": "string", "description": "Categoría libre: agenda, precio, clinico, asesoria, otro."},
                 "summary": {"type": "string", "description": "1-2 frases describiendo qué necesita el contacto."},
-                "draft_for_owner": {"type": "string", "description": "Mensaje sugerido para que owner apruebe/edite antes de relay."},
+                "draft_for_jmf": {"type": "string", "description": "Mensaje sugerido para que Owner apruebe/edite antes de relay."},
             },
             "required": ["thread_id", "kind", "summary"],
         },
@@ -447,13 +459,13 @@ def _update_contact(
     return {"ok": True, "contact_id": cid, "fields_updated": fields, "phone": p}
 
 
-def _open_ticket(thread_id: int, kind: str, summary: str, draft_for_owner: str | None = None) -> dict[str, Any]:
+def _open_ticket(thread_id: int, kind: str, summary: str, draft_for_jmf: str | None = None) -> dict[str, Any]:
     with get_session() as s:
         t = Ticket(
             thread_id=thread_id,
             kind=kind,
             summary=summary,
-            draft_for_owner=draft_for_owner,
+            draft_for_jmf=draft_for_jmf,
             status=TicketStatus.awaiting_jmf,
         )
         s.add(t)
@@ -482,7 +494,7 @@ def execute(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 int(args["thread_id"]),
                 args["kind"],
                 args["summary"],
-                args.get("draft_for_owner"),
+                args.get("draft_for_jmf"),
             )
         # ----- agentic tools -----
         if name == "search_contacts":
@@ -490,13 +502,28 @@ def execute(name: str, args: dict[str, Any]) -> dict[str, Any]:
             return agentic.search_contacts(args["query"], args.get("kind"), int(args.get("limit", 10)))
         if name == "create_task":
             from . import agentic
+            # Merge asset_id / caption / message_template into context para que el
+            # executor (botón 'Ejecutar ahora', scheduler, send-all) los encuentre
+            # sin pedir confirmación extra. Esto arregla el bug donde Iris creaba
+            # la task pero el context quedaba sin asset_id y send_outbound_media
+            # nunca se disparaba.
+            ctx = dict(args.get("context") or {})
+            if args.get("asset_id") is not None:
+                try:
+                    ctx["asset_id"] = int(args["asset_id"])
+                except (TypeError, ValueError):
+                    pass
+            if args.get("caption") is not None:
+                ctx["caption"] = str(args["caption"])[:1024]
+            if args.get("message_template") is not None:
+                ctx["message_template"] = str(args["message_template"])
             return agentic.create_task(
                 int(args["owner_id"]),
                 args["kind"],
                 args["summary"],
                 args.get("raw_instruction"),
                 [int(x) for x in args.get("target_contact_ids", [])],
-                args.get("context"),
+                ctx or None,
                 expected_names=args.get("expected_names"),
             )
         if name == "send_outbound":

@@ -53,7 +53,7 @@ class MessageDirection(str, enum.Enum):
 
 class TicketStatus(str, enum.Enum):
     open = "open"
-    awaiting_jmf = "awaiting_owner"
+    awaiting_jmf = "awaiting_jmf"
     awaiting_patient = "awaiting_patient"
     closed = "closed"
 
@@ -64,7 +64,7 @@ class ThreadStatus(str, enum.Enum):
 
 
 class KbFactSource(str, enum.Enum):
-    owner = "owner"
+    jmf = "jmf"
     landing = "landing"
 
 
@@ -131,7 +131,7 @@ class Ticket(Base):
     thread_id: Mapped[int] = mapped_column(ForeignKey("threads.id"), index=True)
     kind: Mapped[str] = mapped_column(String(64))  # libre: 'agenda', 'precio', 'urgencia', etc.
     summary: Mapped[str] = mapped_column(Text)
-    draft_for_owner: Mapped[str | None] = mapped_column(Text)
+    draft_for_jmf: Mapped[str | None] = mapped_column(Text)
     status: Mapped[TicketStatus] = _enum_col(TicketStatus, "ticket_status", default=TicketStatus.open)
     owner_response: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -148,7 +148,7 @@ class KbFact(Base):
     kb_slug: Mapped[str] = mapped_column(String(64), index=True)
     key: Mapped[str] = mapped_column(String(64))
     value: Mapped[str] = mapped_column(Text)
-    source: Mapped[KbFactSource] = _enum_col(KbFactSource, "kb_fact_source", default=KbFactSource.owner)
+    source: Mapped[KbFactSource] = _enum_col(KbFactSource, "kb_fact_source", default=KbFactSource.jmf)
     ttl_days: Mapped[int | None] = mapped_column(Integer, server_default="90")  # días, None = sin expiración
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_at: Mapped[datetime] = mapped_column(
@@ -183,7 +183,7 @@ class IntentLog(Base):
 
 
 class Task(Base):
-    """Tarea agéntica dictada por owner (owner). Puede tener N targets."""
+    """Tarea agéntica dictada por owner (Owner). Puede tener N targets."""
     __tablename__ = "tasks"
     id: Mapped[int] = mapped_column(primary_key=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), index=True)
@@ -192,6 +192,7 @@ class Task(Base):
     raw_instruction: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     context: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

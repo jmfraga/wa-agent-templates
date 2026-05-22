@@ -47,9 +47,40 @@
         Mensaje a enviar
         <span class="text-slate-400">— usa <code class="bg-slate-100 px-1 rounded">{{ '{' }}{{ '{' }}name{{ '}' }}{{ '}' }}</code> o <code class="bg-slate-100 px-1 rounded">{{ '{' }}{{ '{' }}first_name{{ '}' }}{{ '}' }}</code> para personalizar por destinatario</span>
       </label>
-      <textarea name="message_template" required rows="4"
+      <textarea name="message_template" rows="4"
                 placeholder="Hola {{ '{' }}{{ '{' }}first_name{{ '}' }}{{ '}' }}, te recuerdo nuestra junta del lunes a las 4pm. ¿Confirmas?"
                 class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono"></textarea>
+      <p class="text-[10px] text-slate-400 mt-1">Si vas a mandar una imagen (abajo), este campo es opcional — usaremos el caption como mensaje.</p>
+    </div>
+
+    <div class="border-t border-dashed border-slate-200 pt-3">
+      <label class="block text-xs text-slate-500 mb-1">Imagen adjunta (opcional)</label>
+      <select name="asset_id" id="asset-select" class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white">
+        <option value="">— Sin imagen (solo texto) —</option>
+        {% for a in assets or [] %}
+        <option value="{{ a.id }}" data-thumb="{{ a.preview_url }}" data-mime="{{ a.mime_type }}">
+          {{ (a.label or a.filename)[:80] }} · {{ a.source }} · used {{ a.use_count }}×
+        </option>
+        {% endfor %}
+      </select>
+      <div id="asset-preview" class="mt-2 hidden">
+        <img id="asset-thumb" src="" alt="preview" class="max-h-32 rounded-md border border-slate-200" />
+      </div>
+      <div id="caption-wrap" class="mt-2 hidden">
+        <label class="block text-xs text-slate-500 mb-1">Caption (max 1024)</label>
+        <textarea name="caption" rows="3" maxlength="1024"
+                  placeholder="Hola {{ '{' }}{{ '{' }}first_name{{ '}' }}{{ '}' }}, te comparto la promo del próximo ACLS 🚑"
+                  class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono"
+                  oninput="document.getElementById('caption-count').textContent = this.value.length"></textarea>
+        <div class="text-[10px] text-slate-400 mt-1"><span id="caption-count">0</span> / 1024</div>
+      </div>
+    </div>
+
+    <div>
+      <label class="block text-xs text-slate-500 mb-1">Programar para (opcional)</label>
+      <input type="datetime-local" name="scheduled_at"
+             class="border border-slate-300 rounded-md px-3 py-2 text-sm" />
+      <p class="text-[10px] text-slate-400 mt-1">Si lo dejas vacío, se enviará al confirmar. Si pones una fecha futura, un worker la disparará automáticamente cada 60s.</p>
     </div>
 
     <div class="flex items-center justify-between pt-2 border-t border-slate-200">
@@ -79,6 +110,27 @@
       r.classList.add('hidden');
     }
   });
+
+  // Asset selector: muestra thumb + caption textarea cuando hay asset elegido
+  (function() {
+    const sel = document.getElementById('asset-select');
+    if (!sel) return;
+    sel.addEventListener('change', () => {
+      const opt = sel.options[sel.selectedIndex];
+      const thumb = opt && opt.dataset.thumb;
+      const preview = document.getElementById('asset-preview');
+      const img = document.getElementById('asset-thumb');
+      const capWrap = document.getElementById('caption-wrap');
+      if (sel.value && thumb) {
+        img.src = thumb;
+        preview.classList.remove('hidden');
+        capWrap.classList.remove('hidden');
+      } else {
+        preview.classList.add('hidden');
+        capWrap.classList.add('hidden');
+      }
+    });
+  })();
 
   // Agregar/quitar destinatario chips (delegación en body para HTMX)
   function syncEmptyHint() {
