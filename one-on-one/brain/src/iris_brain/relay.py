@@ -1,7 +1,7 @@
 """Clientes HTTP para relays.
 
 Sprint 2 frozen decision:
-- send_to_owner  → relay-bot Telegram (OWNER_RELAY_WEBHOOK, default :8098).
+- send_to_jmf  → relay-bot Telegram (JMF_RELAY_WEBHOOK, default :8098).
 - send_to_contact → wa-listener (CONTACT_RELAY_WEBHOOK, default :8099).
 
 El wa-listener exige `phone`, no `thread_id`; lo resolvemos consultando la DB.
@@ -37,12 +37,12 @@ def _resolve_phone(thread_id: int) -> str | None:
 class Relay:
     def __init__(
         self,
-        owner_webhook_url: str | None = None,
+        jmf_webhook_url: str | None = None,
         contact_webhook_url: str | None = None,
         client: httpx.Client | None = None,
     ) -> None:
-        self.owner_webhook_url = (
-            owner_webhook_url if owner_webhook_url is not None else settings.OWNER_RELAY_WEBHOOK
+        self.jmf_webhook_url = (
+            jmf_webhook_url if jmf_webhook_url is not None else settings.JMF_RELAY_WEBHOOK
         )
         self.contact_webhook_url = (
             contact_webhook_url
@@ -63,20 +63,20 @@ class Relay:
             log.exception("%s relay POST falló", label)
             return {"ok": False, "error": str(e)}
 
-    def send_to_owner(self, ticket: dict[str, Any]) -> dict[str, Any]:
-        """Manda ticket al relay-bot Telegram para aprobación/respuesta de owner."""
+    def send_to_jmf(self, ticket: dict[str, Any]) -> dict[str, Any]:
+        """Manda ticket al relay-bot Telegram para aprobación/respuesta de Owner."""
         payload = {
-            "type": "ticket_to_owner",
+            "type": "ticket_to_jmf",
             "ticket_id": ticket.get("id") or ticket.get("ticket_id"),
             "thread_id": ticket.get("thread_id"),
             "kind": ticket.get("kind"),
             "summary": ticket.get("summary"),
-            "draft_for_owner": ticket.get("draft_for_owner"),
+            "draft_for_jmf": ticket.get("draft_for_jmf"),
             "urgent": ticket.get("urgent", False),
             "contact_phone": ticket.get("contact_phone"),
             "contact_name": ticket.get("contact_name"),
         }
-        return self._post(self.owner_webhook_url, payload, label="owner")
+        return self._post(self.jmf_webhook_url, payload, label="jmf")
 
     def send_media_to_contact(
         self,
@@ -84,8 +84,14 @@ class Relay:
         phone: str,
         asset_id: int,
         caption: str | None = None,
+        body_text: str | None = None,
     ) -> dict[str, Any]:
-        """Envía imagen al contacto vía wa-listener. El listener descarga desde MEDIA_INTERNAL_URL."""
+        """Envía imagen al contacto vía wa-listener.
+
+        Si body_text viene, wa-listener manda primero el texto (con URL preview) y
+        después la imagen con caption corto. Si no hay body_text, va solo la imagen
+        con caption.
+        """
         if not self.contact_webhook_url:
             return {"ok": False, "noop": True, "reason": "no_webhook"}
         media_url = f"{settings.MEDIA_INTERNAL_URL.rstrip('/')}/media/{asset_id}/raw"
@@ -99,10 +105,12 @@ class Relay:
                 "caption": caption,
             },
         }
+        if body_text:
+            payload["body"] = body_text
         return self._post(self.contact_webhook_url, payload, label="contact_media")
 
     def send_to_contact(self, thread_id: int, body: str) -> dict[str, Any]:
-        """Manda respuesta de owner al contacto vía wa-listener.
+        """Manda respuesta de Owner al contacto vía wa-listener.
 
         El wa-listener necesita `phone` (no `thread_id`); lo resolvemos en DB.
         """

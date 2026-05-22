@@ -634,6 +634,35 @@ async def admin_task_send(
     import httpx
     is_asset = has_asset in ("on", "true", "1", "yes")
     async with httpx.AsyncClient(timeout=60) as c:
+        # Si la task tiene scheduled_at futuro, NO ejecutar — el worker la disparará.
+        try:
+            tr = await c.get(f"{settings.BRAIN_URL}/tasks/{task_id}")
+            if tr.status_code == 200:
+                tdata = tr.json()
+                sched = tdata.get("scheduled_at")
+                if sched:
+                    from datetime import datetime, timezone
+                    try:
+                        sched_dt = datetime.fromisoformat(sched.replace("Z", "+00:00"))
+                        if sched_dt.tzinfo is None:
+                            sched_dt = sched_dt.replace(tzinfo=timezone.utc)
+                        if sched_dt > datetime.now(timezone.utc):
+                            return templates.TemplateResponse(
+                                request,
+                                "admin/_partials/task_preview.html",
+                                {"request": request, "result": {
+                                    "ok": True,
+                                    "scheduled": True,
+                                    "scheduled_at": sched,
+                                    "results": [],
+                                    "task_id": task_id,
+                                }},
+                            )
+                    except ValueError:
+                        pass
+        except httpx.HTTPError:
+            pass
+
         try:
             if is_asset:
                 # Usar el executor (consulta context.asset_id + caption)
