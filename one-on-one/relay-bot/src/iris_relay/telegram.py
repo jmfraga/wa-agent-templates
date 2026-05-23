@@ -462,7 +462,7 @@ class TelegramRelay:
             self.telegram.edit_message_text(
                 chat_id, row.message_id, render_reply_sent(row.ticket_id, body)
             )
-            self.telegram.send_message(chat_id, f"✅ Respuesta enviada al paciente (ticket #{row.ticket_id}).")
+            self.telegram.send_message(chat_id, f"✅ Respuesta enviada al usuario (ticket #{row.ticket_id}).")
         except Exception as e:  # noqa: BLE001
             log.exception("Failed forwarding Owner reply for ticket %s", row.ticket_id)
             self.telegram.send_message(chat_id, f"❌ Falló enviar la respuesta del ticket #{row.ticket_id}: {e}")
@@ -492,7 +492,7 @@ class TelegramRelay:
         ui_url = self.settings.ui_url.rstrip("/")
         return (
             "<b>🌸 Iris — bot puente</b>\n\n"
-            "Soy el puente entre los pacientes/prospectos de WhatsApp y tú. "
+            "Soy el puente entre los usuarios/prospectos de WhatsApp y tú. "
             "Cuando llega un ticket nuevo te aviso aquí con botones.\n\n"
             "<b>Comandos:</b>\n"
             "• /pendientes — tickets esperando tu respuesta\n"
@@ -513,7 +513,7 @@ class TelegramRelay:
             return
         groups = data.get("groups") or {}
         # Mostrar TODOS los activos (no solo awaiting_jmf): open + awaiting_jmf + awaiting_patient.
-        active_statuses = [("awaiting_jmf", "⏳ Esperan tu respuesta"), ("open", "🆕 Recién creados"), ("awaiting_patient", "📤 Esperan al paciente")]
+        active_statuses = [("awaiting_jmf", "⏳ Esperan tu respuesta"), ("open", "🆕 Recién creados"), ("awaiting_patient", "📤 Esperan al usuario")]
         active_total = sum(len(groups.get(s, [])) for s, _ in active_statuses)
         if active_total == 0:
             self.telegram.send_message(chat_id, "✅ No hay tickets activos en este momento.")
@@ -549,7 +549,7 @@ class TelegramRelay:
                     "urgent": t.get("kind") == "urgencia",
                 }
                 text = render_ticket_message(payload)
-                # Para awaiting_patient: indicar que el paciente ya recibió respuesta.
+                # Para awaiting_patient: indicar que el usuario ya recibió respuesta.
                 if status_key == "awaiting_patient" and t.get("jmf_response"):
                     text += f"\n\n<i>Tu última respuesta:</i>\n<blockquote>{_esc(t['jmf_response'][:300])}</blockquote>"
                 markup = build_inline_keyboard(payload)
@@ -584,7 +584,7 @@ class TelegramRelay:
             f"<b>🎫 Tickets activos</b>\n\n"
             f"• Open: {counts.get('open', 0)}\n"
             f"• Esperando tu respuesta: {counts.get('awaiting_jmf', 0)}\n"
-            f"• Esperando paciente: {counts.get('awaiting_patient', 0)}\n"
+            f"• Esperando usuario: {counts.get('awaiting_patient', 0)}\n"
             f"• Cerrados hoy: {counts.get('closed', 0)}\n\n"
             f"<b>Detalle de awaiting_jmf:</b>\n"
         )

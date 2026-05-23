@@ -156,7 +156,7 @@ def _direct_reply(messages: list[dict], contact_id: int | None = None, thread_id
             kwargs_no_tools = {k: v for k, v in kwargs.items() if k != "tools"}
             forced_messages = messages + [{
                 "role": "user",
-                "content": "Genera ahora tu respuesta de texto visible al paciente, en 1-3 líneas, español mexicano, tono Iris.",
+                "content": "Genera ahora tu respuesta de texto visible al usuario, en 1-3 líneas, español mexicano, tono Iris.",
             }]
             forced = client.messages.create(messages=forced_messages, **kwargs_no_tools)
             reply = _extract_text(forced.content)
@@ -255,7 +255,7 @@ def handle_message(
             thread_id,
             kind="urgencia" if is_high else "posible_urgencia",
             summary=f"{'🚨 ' if is_high else ''}{crisis.category.upper()} [{crisis.level}]: {text[:180]}",
-            draft_for_jmf=f"Match: '{crisis.matched}'\n\nTexto del paciente:\n{text}",
+            draft_for_jmf=f"Match: '{crisis.matched}'\n\nTexto del usuario:\n{text}",
         )
         ticket_id = tid.get("ticket_id")
         get_relay().send_to_jmf({
@@ -368,7 +368,7 @@ def handle_message(
                 "content": (
                     f"{msgs[-1]['content']}\n\n"
                     f"[nota interna del sistema, NO la repitas: ya abrí el ticket #{ticket_id} "
-                    f"de tipo {intent} con Owner. Solo responde al paciente con una frase puente "
+                    f"de tipo {intent} con Owner. Solo responde al usuario con una frase puente "
                     f"breve (1-2 líneas), personalizada con su nombre si lo sabes, en tono cálido "
                     f"de Iris. Ejemplos: 'Gracias {{nombre}}, déjame checar con el doctor', "
                     f"'Va, paso el contexto al Dr. Fraga y te confirmo en cuanto sepa', etc. Varía.]"
@@ -396,7 +396,7 @@ def handle_message(
         reply, usage_out, _stop = _direct_reply(msgs, contact_id=contact_id, thread_id=thread_id)
 
     # Hard fallback: si después de todo no hay reply, manda un ack genérico
-    # para que el paciente NO se quede sin respuesta.
+    # para que el usuario NO se quede sin respuesta.
     if not reply and intent not in {"urgencia_clinica"}:
         reply = "Gracias, recibí tu mensaje. Te respondo en breve."
         log.warning("hard fallback reply used for intent=%s phone=%s", intent, contact_phone)

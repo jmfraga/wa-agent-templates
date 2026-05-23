@@ -37,10 +37,10 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
 
     # --- Relays ---
-    # Sprint 2 frozen decision: tickets a owner van por Telegram bot dedicado.
-    # OWNER_RELAY_WEBHOOK = relay-bot Telegram (brain → owner).
-    OWNER_RELAY_WEBHOOK: str | None = "http://localhost:8098/send-to-owner"
-    # CONTACT_RELAY_WEBHOOK = wa-listener (brain → paciente vía WhatsApp).
+    # Sprint 2 frozen decision: tickets a Owner van por Telegram bot dedicado.
+    # JMF_RELAY_WEBHOOK = relay-bot Telegram (brain → Owner).
+    JMF_RELAY_WEBHOOK: str | None = "http://localhost:8098/send-to-jmf"
+    # CONTACT_RELAY_WEBHOOK = wa-listener (brain → usuario vía WhatsApp).
     CONTACT_RELAY_WEBHOOK: str | None = "http://localhost:8099/send-to-contact"
 
     # --- Admin auth (Sprint 3) ---

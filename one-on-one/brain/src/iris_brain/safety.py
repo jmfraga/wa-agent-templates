@@ -2,18 +2,18 @@
 
 Portado de Health Companion Sprint 1 (apps/api/src/api/agents/crisis.py).
 Diferencias vs HC:
-  - Templates adaptados: Iris es asistente de un médico real (OWNER), no companion.
-    Cada template incluye "estoy avisando al owner" para reforzar el puente humano.
-  - Tras detección, Iris SIEMPRE abre ticket urgente con OWNER en Telegram (HC no tenía relay).
-  - OWNER "casi no ve pacientes" → falsos positivos son baratos. La detección es agresiva.
+  - Templates adaptados: Iris es asistente de un médico real (Owner), no companion.
+    Cada template incluye "estoy avisando al doctor" para reforzar el puente humano.
+  - Tras detección, Iris SIEMPRE abre ticket urgente con Owner en Telegram (HC no tenía relay).
+  - Owner "casi no ve pacientes" → falsos positivos son baratos. La detección es agresiva.
 
 Funcionamiento:
   1. detect(text) revisa keywords normalizadas (sin acentos, lowercase) por categoría.
   2. Devuelve CrisisMatch(category, level, matched) o None.
-  3. get_response(match) devuelve el texto que Iris envía al paciente.
+  3. get_response(match) devuelve el texto que Iris envía al usuario.
   4. handle_message en chat.py corre detect() ANTES de classify_intent.
      Si hay match high → envía template, abre ticket urgente, NO llama LLM.
-     Si hay match medium → envía clarification, abre ticket awaiting_owner, NO llama LLM.
+     Si hay match medium → envía clarification, abre ticket awaiting_jmf, NO llama LLM.
      Si no hay match → flujo normal de intents.
 """
 
@@ -257,47 +257,47 @@ CRISIS_TEMPLATES: dict[str, str] = {
     "suicida": (
         "Lo que me cuentas importa, y quiero que estés a salvo en este momento. "
         "Por favor habla ahora con alguien preparado para acompañarte:\n\n"
-        "• <crisis hotline — TODO configure for your country>\n"
+        "• SAPTEL — 55 5259-8121 (24h, gratis, sin juzgar)\n"
         "• Emergencias — 911\n\n"
-        "Le estoy avisando al owner en este momento. "
+        "Le estoy avisando al Dr. Fraga en este momento. "
         "Lo más importante eres tú. Aquí estoy."
     ),
     "crisis_emocional": (
         "Lo que describes suena muy intenso y tiene sentido que estés así. "
         "Quiero que hables con alguien que sepa acompañarte:\n\n"
-        "• <crisis hotline — TODO configure for your country>\n"
+        "• SAPTEL — 55 5259-8121 (24h, gratis)\n"
         "• 911 si sientes que algo físico también está pasando\n\n"
-        "Le estoy avisando al owner en este momento. Aquí sigo cuando estés más tranquilo."
+        "Le estoy avisando al doctor en este momento. Aquí sigo cuando estés más tranquilo."
     ),
     "emergencia_medica": (
         "Lo que describes necesita atención médica YA, no después.\n\n"
         "• Llama al 911 ahora, o pide que alguien te lleve a urgencias.\n"
         "• Si estás solo, abre la puerta de tu casa para que puedan entrar.\n"
-        "• <medical hotline — TODO configure for your country>\n\n"
-        "Le estoy avisando al owner en este momento. "
+        "• IMSS Orientación Médica — 800 890 7060\n\n"
+        "Le estoy avisando al Dr. Fraga en este momento. "
         "Lo que necesitas es un médico en persona ya."
     ),
     "violencia": (
         "Lo que me cuentas es serio, y nadie merece vivir así. "
         "Hay líneas que funcionan 24h:\n\n"
-        "• <DV hotline — TODO configure for your country>\n"
-        "• <DV hotline 2 — TODO configure for your country>\n"
+        "• INMUJERES — 800 911 2511 (24h, confidencial)\n"
+        "• Línea de las Mujeres CDMX — 800 108 4053\n"
         "• 911 si el riesgo es ahora\n\n"
-        "Le estoy avisando al owner. Tu seguridad es lo primero."
+        "Le estoy avisando al doctor. Tu seguridad es lo primero."
     ),
     "trauma": (
         "Lo que me describes puede ser una lesión seria. Por favor:\n\n"
         "• No te muevas más de lo necesario — sobre todo si hay golpe en cabeza, cuello o espalda.\n"
         "• Llama al 911 ahora, o que alguien lo haga por ti.\n"
         "• Quédate en lugar seguro y espera a los servicios de emergencia.\n\n"
-        "Le estoy avisando al owner. Cuando estés con los paramédicos, me avisas."
+        "Le estoy avisando al Dr. Fraga. Cuando estés con los paramédicos, me avisas."
     ),
     "hemorragia": (
         "Necesitas ayuda médica AHORA. Por favor:\n\n"
         "• Llama al 911 ya.\n"
         "• Si el sangrado es externo: presiona directo sobre la herida con una tela limpia, mantén la presión sin soltar.\n"
         "• Si sospechas sangrado interno: recuéstate, no te muevas, espera a emergencias o pide que te trasladen.\n\n"
-        "Le estoy avisando al owner en este momento."
+        "Le estoy avisando al doctor en este momento."
     ),
     "terceros": (
         "Esto es una emergencia. Actúa ahora:\n\n"
@@ -306,16 +306,16 @@ CRISIS_TEMPLATES: dict[str, str] = {
         "3. Mientras llega la ayuda:\n"
         "   • Si no respira / inconsciente: inicia RCP solo con manos — presiona fuerte y rápido en el centro del pecho, sin parar.\n"
         "   • Si está consciente: mantenlo seguro, abrigado, sin moverlo si sospechas lesión.\n\n"
-        "El 911 te guía en tiempo real mejor que yo. Le estoy avisando al owner."
+        "El 911 te guía en tiempo real mejor que yo. Le estoy avisando al doctor."
     ),
 }
 
-# Medium signal — pide aclaración antes de escalar pero ya abre ticket awaiting_owner
+# Medium signal — pide aclaración antes de escalar pero ya abre ticket awaiting_jmf
 CLARIFICATION_TEMPLATE = (
     "Lo que me dijiste me llamó la atención y quiero entenderte bien. "
     "¿Es algo que estás sintiendo en serio, o es más una manera de decir "
     "lo agotado/a que estás? No hay respuesta mala. "
-    "Mientras tanto le aviso al owner para que esté pendiente."
+    "Mientras tanto le aviso al doctor para que esté pendiente."
 )
 
 
