@@ -398,7 +398,6 @@ def create_task_endpoint(req: TaskCreateRequest) -> dict[str, Any]:
 @app.post("/tasks/{task_id}/cancel")
 def cancel_task(task_id: int) -> dict[str, Any]:
     from .models import Task, TaskTarget
-    from datetime import datetime, timezone
     from sqlalchemy import update as sa_update
 
     with get_session() as s:
@@ -411,6 +410,53 @@ def cancel_task(task_id: int) -> dict[str, Any]:
             sa_update(TaskTarget).where(TaskTarget.task_id == task_id, TaskTarget.status.in_(["pending", "sent"])).values(status="cancelled")
         )
         return {"ok": True, "task_id": task_id, "status": "cancelled"}
+
+
+@app.post("/tasks/{task_id}/close")
+def close_task(task_id: int) -> dict[str, Any]:
+    """Marca task como completa (manualmente). Cancela los targets que sigan en 'pending'
+    pero deja los 'sent' y 'responded' intactos. Usar cuando Owner terminó de atender la task
+    fuera de Iris y solo quiere quitarla del board."""
+    from .models import Task, TaskTarget
+    from sqlalchemy import update as sa_update
+
+    with get_session() as s:
+        t = s.get(Task, task_id)
+        if t is None:
+            raise HTTPException(404, "task no existe")
+        t.status = "complete"
+        t.completed_at = datetime.now(timezone.utc)
+        s.execute(
+            sa_update(TaskTarget).where(TaskTarget.task_id == task_id, TaskTarget.status == "pending").values(status="cancelled")
+        )
+        return {"ok": True, "task_id": task_id, "status": "complete"}
+
+
+@app.post("/tasks/{task_id}/targets/{target_id}/cancel")
+def cancel_task_target(task_id: int, target_id: int) -> dict[str, Any]:
+    """Cancela un único target de la task (Amaya, p.ej.) sin tocar a los demás.
+    Si tras cancelarlo no quedan targets pending/sent, marca la task como complete."""
+    from .models import Task, TaskTarget
+    from sqlalchemy import func as sa_func
+
+    with get_session() as s:
+        tt = s.get(TaskTarget, target_id)
+        if tt is None or tt.task_id != task_id:
+            raise HTTPException(404, "target no existe en esta task")
+        if tt.status in ("responded",):
+            raise HTTPException(409, "ese target ya respondió — no se puede cancelar (cancela la task entera si quieres archivarla)")
+        tt.status = "cancelled"
+        # Si ya no quedan en pending/sent, cerrar la task automáticamente.
+        remaining = s.scalar(
+            select(sa_func.count()).select_from(TaskTarget)
+            .where(TaskTarget.task_id == task_id, TaskTarget.status.in_(["pending", "sent"]))
+        ) or 0
+        if remaining == 0:
+            t = s.get(Task, task_id)
+            if t is not None and t.status not in ("complete", "cancelled"):
+                t.status = "complete"
+                t.completed_at = datetime.now(timezone.utc)
+        return {"ok": True, "task_id": task_id, "target_id": target_id, "status": "cancelled", "remaining_active": remaining}
 
 
 class OwnerInstructRequest(BaseModel):
