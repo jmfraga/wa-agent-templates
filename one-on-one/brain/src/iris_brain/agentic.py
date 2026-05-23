@@ -535,6 +535,116 @@ def report_to_owner(text: str, task_id: int | None = None) -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
+# --- Forward owner answer (Phase 1c.fix) ------------------------------------
+
+def forward_owner_answer(contact_phone: str, answer_text: str) -> dict[str, Any]:
+    """Reenvía la respuesta corta del owner (Owner) a un contacto que Iris
+    consultó previamente (típicamente tras un `task_response_ack`).
+
+    - NO crea task nueva.
+    - NO incluye saludo de presentación ni pitch — el contacto ya conoce a Iris.
+    - Usa el thread más reciente del contacto.
+    - Envía vía wa-listener (mismo endpoint que send_outbound).
+    - Persiste el Message con model_used='owner_answer_forward'.
+
+    Returns {ok, thread_id?, contact_name?, error?, warning?}.
+    """
+    from .sessions import sanitize_phone
+    from datetime import timedelta
+
+    if not contact_phone or not contact_phone.strip():
+        return {"ok": False, "error": "contact_phone vacío"}
+    if not answer_text or not answer_text.strip():
+        return {"ok": False, "error": "answer_text vacío"}
+    answer_text = answer_text.strip()
+    if len(answer_text) > 1024:
+        answer_text = answer_text[:1024]
+
+    p = sanitize_phone(contact_phone)
+    warning: str | None = None
+
+    with get_session() as s:
+        c = s.scalar(select(Contact).where(Contact.phone == p))
+        if c is None:
+            return {"ok": False, "error": f"contacto no existe para phone={p}"}
+        contact_name = c.name
+        contact_id = c.id
+        # Thread más reciente
+        thread = s.scalar(
+            select(Thread)
+            .where(Thread.contact_id == c.id)
+            .order_by(Thread.opened_at.desc())
+            .limit(1)
+        )
+        if thread is None:
+            return {"ok": False, "error": "contacto sin thread previo — no hay conversación que continuar"}
+        thread_id = thread.id
+
+        # Verifica que exista un Message reciente (últimas 24h) con model_used='task_response_ack'.
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        ack_msg = s.scalar(
+            select(Message)
+            .where(
+                Message.thread_id == thread_id,
+                Message.model_used == "task_response_ack",
+                Message.created_at >= cutoff,
+            )
+            .order_by(Message.created_at.desc())
+            .limit(1)
+        )
+        if ack_msg is None:
+            warning = (
+                "no encontré task_response_ack reciente (<24h) en este thread; "
+                "envío en modo fallback. Asegúrate de que esto es realmente "
+                "una respuesta a algo que Iris reportó."
+            )
+            log.warning("forward_owner_answer fallback: phone=%s sin ack reciente", p)
+
+    # POST a wa-listener (mismo path que send_outbound)
+    wa_url = (settings.CONTACT_RELAY_WEBHOOK or "http://localhost:8099/send-to-contact")
+    try:
+        with httpx.Client(timeout=10) as client:
+            r = client.post(wa_url, json={
+                "type": "outbound",
+                "phone": p,
+                "body": answer_text,
+                "thread_id": thread_id,
+            })
+            r.raise_for_status()
+            wa_resp = r.json()
+    except httpx.HTTPError as e:
+        log.exception("forward_owner_answer: wa-listener falló")
+        return {"ok": False, "error": str(e)}
+
+    if not wa_resp.get("ok"):
+        log.warning("forward_owner_answer: wa-listener returned %s", wa_resp)
+        return {"ok": False, "error": wa_resp.get("error", "wa_listener_fail")}
+
+    # Persiste Message como owner_answer_forward
+    with get_session() as s:
+        s.add(Message(
+            thread_id=thread_id,
+            direction=MessageDirection.out,
+            body=answer_text,
+            model_used="owner_answer_forward",
+        ))
+
+    log.info(
+        "forward_owner_answer OK: contact_id=%s thread_id=%s len=%d",
+        contact_id, thread_id, len(answer_text),
+    )
+    result: dict[str, Any] = {
+        "ok": True,
+        "thread_id": thread_id,
+        "contact_name": contact_name,
+        "contact_id": contact_id,
+        "message_id": wa_resp.get("message_id"),
+    }
+    if warning:
+        result["warning"] = warning
+    return result
+
+
 # --- Response tracking (called from chat.handle_message) --------------------
 
 def render_message_template(template: str, contact_name: str | None, contact_phone: str) -> str:

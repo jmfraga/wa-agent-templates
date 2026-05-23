@@ -340,6 +340,34 @@ TOOLS: list[dict] = [
         },
     },
     # ============ FIN TOOLS DE MEDIA ============
+    {
+        "name": "forward_owner_answer",
+        "description": (
+            "Reenvía la respuesta de Owner a un contacto que Iris consultó previamente "
+            "(típicamente cuando Iris ya dijo 'le paso tu duda al doctor' tras un task_response_ack). "
+            "ÚSALO cuando Owner te dé info corta como respuesta a algo que ya reportaste (precio, fecha, "
+            "sí/no, disponibilidad, etc).\n\n"
+            "**NO crea task nueva. NO uses create_task/send_outbound.**\n"
+            "**NO incluye saludo de presentación** porque ya hubo conversación previa con el contacto.\n\n"
+            "answer_text debe ser CORTO (1-3 oraciones) con tono Iris cálido y personalizado al nombre "
+            "del contacto. Envía al thread más reciente del contacto.\n\n"
+            "Devuelve {ok, thread_id, contact_name, warning?} o {ok: false, error}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contact_phone": {
+                    "type": "string",
+                    "description": "Teléfono del contacto destinatario (al que Iris consultó previamente).",
+                },
+                "answer_text": {
+                    "type": "string",
+                    "description": "Texto corto (1-1024 chars) con la info que Owner dio. Tono Iris cálido, español MX. Incluye nombre del contacto.",
+                },
+            },
+            "required": ["contact_phone", "answer_text"],
+        },
+    },
     # ============ FIN TOOLS AGÉNTICOS ============
     {
         "name": "open_ticket",
@@ -560,6 +588,12 @@ def execute(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 int(args["target_id"]),
                 int(args["asset_id"]),
                 caption=args.get("caption"),
+            )
+        if name == "forward_owner_answer":
+            from . import agentic
+            return agentic.forward_owner_answer(
+                contact_phone=args["contact_phone"],
+                answer_text=args["answer_text"],
             )
     except Exception as e:
         log.exception("tool %s failed", name)

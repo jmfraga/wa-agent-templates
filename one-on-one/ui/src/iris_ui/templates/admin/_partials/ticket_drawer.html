@@ -32,10 +32,10 @@
     </section>
 
     {# Draft sugerido por Iris #}
-    {% if t.get('draft_for_owner') %}
+    {% if t.get('draft_for_jmf') %}
     <section>
       <h3 class="text-xs uppercase tracking-wide text-slate-500 mb-2">Draft sugerido</h3>
-      <pre class="bg-amber-50 border border-amber-200 rounded p-2 text-sm whitespace-pre-wrap">{{ t.get('draft_for_owner') }}</pre>
+      <pre class="bg-amber-50 border border-amber-200 rounded p-2 text-sm whitespace-pre-wrap">{{ t.get('draft_for_jmf') }}</pre>
     </section>
     {% endif %}
 
@@ -60,7 +60,7 @@
   <div class="border-t p-4 bg-slate-50">
     <form hx-post="/admin/tickets/{{ ticket_id }}/reply" hx-target="#drawer-result" class="space-y-2">
       <textarea name="body" required rows="3"
-                placeholder="Respuesta para el paciente..."
+                placeholder="Respuesta para el usuario..."
                 class="w-full rounded-md border-slate-300 text-sm"></textarea>
       <label class="flex items-center gap-2 text-sm">
         <input type="checkbox" name="close_after" value="on" />
@@ -75,7 +75,7 @@
     <div class="mt-3 pt-3 border-t border-slate-200 flex flex-wrap gap-2 items-center">
       <span class="text-xs text-slate-500">Mover a:</span>
       {% set ticket_status = ticket.status if ticket and ticket.status else "" %}
-      {% for st, label in [("open","🆕 Open"),("awaiting_owner","⏳ Esperando owner"),("awaiting_patient","📤 Esperando paciente"),("closed","🗄 Cerrado")] %}
+      {% for st, label in [("open","🆕 Open"),("awaiting_jmf","⏳ Esperando Owner"),("awaiting_patient","📤 Esperando usuario"),("closed","🗄 Cerrado")] %}
       <form hx-post="/admin/tickets/{{ ticket_id }}/status" hx-target="#drawer-result" class="inline">
         <input type="hidden" name="status" value="{{ st }}" />
         <button type="submit"
@@ -115,7 +115,7 @@
         </div>
         <div>
           <label class="block text-xs text-slate-500 mb-1">Draft for owner</label>
-          <textarea name="draft_for_owner" rows="2" class="w-full border border-slate-300 rounded-md px-2 py-1 text-sm">{{ ticket.draft_for_owner or ticket.draft_for_owner or '' }}</textarea>
+          <textarea name="draft_for_owner" rows="2" class="w-full border border-slate-300 rounded-md px-2 py-1 text-sm">{{ ticket.draft_for_owner or ticket.draft_for_jmf or '' }}</textarea>
         </div>
       </form>
     </div>

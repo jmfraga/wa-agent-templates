@@ -39,7 +39,7 @@ def _esc(text: Optional[str]) -> str:
 
 
 def render_ticket_message(payload: dict[str, Any]) -> str:
-    """Build the HTML body shown to OWNER when a new ticket arrives."""
+    """Build the HTML body shown to Owner when a new ticket arrives."""
     kind = payload.get("kind", "otro")
     icon = KIND_ICONS.get(kind, "📩")
     label = KIND_LABELS.get(kind, kind)
@@ -118,13 +118,13 @@ def build_inline_keyboard(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def render_closed(ticket_id: int) -> str:
-    return f"🚫 <b>Cerrado por OWNER</b> · ticket #{ticket_id}"
+    return f"🚫 <b>Cerrado por Owner</b> · ticket #{ticket_id}"
 
 
 def render_reply_prompt(ticket_id: int) -> str:
     return (
         f"✍️ <b>Ticket #{ticket_id}</b> · esperando tu respuesta\n\n"
-        f"Solo escribe tu mensaje y enviarlo aquí — yo se lo mando al paciente.\n"
+        f"Solo escribe tu mensaje y enviarlo aquí — yo se lo mando al usuario.\n"
         f"(También puedes usar <i>Reply</i> nativo a este mensaje si prefieres.)"
     )
 
