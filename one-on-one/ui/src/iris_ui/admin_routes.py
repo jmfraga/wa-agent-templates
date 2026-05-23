@@ -417,22 +417,109 @@ async def admin_health(request: Request) -> HTMLResponse:
     )
 
 
+# Status canonicales de tasks agénticas. Orden = orden visual en listado.
+# Cualquier status nuevo en brain/models.py debe agregarse aquí para que tenga
+# tab propia. Si el brain regresa un status desconocido, cae a la pestaña "otros".
+TASK_STATUSES: list[tuple[str, str]] = [
+    ("pending", "Pendientes"),
+    ("in_progress", "En curso"),
+    ("awaiting_responses", "Esperando respuestas"),
+    ("complete", "Completas"),
+    ("cancelled", "Canceladas"),
+    ("failed", "Fallidas"),
+]
+
+# Orden de prioridad para ordenamiento del listado "Todas".
+_TASK_SORT_BUCKET = {
+    "pending": 1,
+    "in_progress": 2,
+    "awaiting_responses": 3,
+    "complete": 4,
+    "cancelled": 5,
+    "failed": 6,
+}
+
+
+def _task_sort_key(t: dict[str, Any]) -> tuple:
+    """Orden: pending+scheduled futuras asc, pending sin schedule, in_progress,
+    awaiting_responses, luego complete/cancelled/failed por updated_at desc."""
+    from datetime import datetime, timezone
+
+    status = t.get("status") or ""
+    sched = t.get("scheduled_at")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    bucket = _TASK_SORT_BUCKET.get(status, 99)
+    # bucket 0: pending con scheduled futuro (asc por fecha)
+    if status == "pending" and sched and sched > now_iso:
+        return (0, sched, 0)
+    # buckets normales: por updated_at desc (negamos via ordenamiento invertido del string)
+    updated = t.get("updated_at") or ""
+    return (bucket, "", _inv_iso(updated))
+
+
+def _inv_iso(s: str) -> str:
+    """Invierte un ISO timestamp para ordenamiento descendente en sort ascendente."""
+    if not s:
+        return "~"  # vacíos al final
+    return "".join(chr(0x7E - (ord(c) - 0x20)) if 0x20 <= ord(c) <= 0x7E else c for c in s)
+
+
 @router.get("/tasks", response_class=HTMLResponse)
 async def admin_tasks(request: Request, status: str | None = None) -> HTMLResponse:
+    """Listado de tareas agénticas con tabs por status, counts y ordenamiento.
+
+    Trae siempre el set completo (limit alto) del brain para poder calcular los
+    counts por status correctamente. El filtrado por status se aplica en Python
+    DESPUÉS de calcular los counts, así la pestaña activa muestra el subset
+    pero los tabs reflejan el total real.
+    """
     import httpx
-    params = {}
-    if status:
-        params["status"] = status
+    from datetime import datetime, timezone
+
+    # Limit alto: 200 es el máx del brain. Suficiente para casi cualquier caso.
     async with httpx.AsyncClient(timeout=10) as c:
         try:
-            r = await c.get(f"{settings.BRAIN_URL}/tasks", params=params)
+            r = await c.get(f"{settings.BRAIN_URL}/tasks", params={"limit": 200})
             data = r.json()
         except httpx.HTTPError:
             data = {"tasks": [], "brain_offline": True}
+
+    all_tasks = data.get("tasks", [])
+
+    # Counts por status (todos los statuses conocidos arrancan en 0).
+    counts: dict[str, int] = {st: 0 for st, _ in TASK_STATUSES}
+    for t in all_tasks:
+        st = t.get("status") or "pending"
+        counts[st] = counts.get(st, 0) + 1
+    counts["__all__"] = len(all_tasks)
+
+    # Filtrado: solo si status válido. Si llega un status desconocido, regresamos
+    # lista vacía pero seguimos mostrando los tabs.
+    valid_statuses = {st for st, _ in TASK_STATUSES}
+    if status and status in valid_statuses:
+        tasks = [t for t in all_tasks if (t.get("status") or "pending") == status]
+    else:
+        tasks = list(all_tasks)
+        if status and status not in valid_statuses:
+            status = None  # ignorar status desconocido en el render
+
+    # Ordenamiento: pending scheduled futuras primero, luego buckets por prioridad.
+    tasks.sort(key=_task_sort_key)
+
+    # Pre-calcular flag "is_scheduled_future" para el template.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for t in tasks:
+        sched = t.get("scheduled_at")
+        t["_is_scheduled_future"] = bool(
+            t.get("status") == "pending" and sched and sched > now_iso
+        )
+
     return _render(request, "admin/tasks.html", {
         "active": "tasks",
-        "tasks": data.get("tasks", []),
+        "tasks": tasks,
         "status": status or "",
+        "task_statuses": TASK_STATUSES,
+        "task_counts": counts,
         "brain_offline": data.get("brain_offline", False),
     })
 
