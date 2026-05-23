@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,  # noqa: F401 — usado en columnas anti-saturación
     DateTime,
     Enum,
     ForeignKey,
@@ -87,6 +88,12 @@ class Contact(Base):
     last_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    # Anti-saturación (migración 0010)
+    silent_mode: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    paused_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_outbound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outbound_count_24h: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    outbound_count_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     threads: Mapped[list["Thread"]] = relationship(back_populates="contact")
 
@@ -133,7 +140,7 @@ class Ticket(Base):
     summary: Mapped[str] = mapped_column(Text)
     draft_for_jmf: Mapped[str | None] = mapped_column(Text)
     status: Mapped[TicketStatus] = _enum_col(TicketStatus, "ticket_status", default=TicketStatus.open)
-    owner_response: Mapped[str | None] = mapped_column(Text)
+    jmf_response: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

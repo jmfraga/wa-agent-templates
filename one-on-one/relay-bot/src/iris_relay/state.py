@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Integer,
     String,
+    Text,
     create_engine,
     select,
 )
@@ -27,11 +28,29 @@ class TicketTelegramMap(Base):
     message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     thread_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="awaiting_owner")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="awaiting_jmf")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
+
+
+class PendingAction(Base):
+    """Estado libre por chat para callbacks que esperan input siguiente.
+
+    Tipos:
+    - usr_reply       payload={"contact_phone": "..."}
+    - plan_edit       payload={"task_id": N}
+    - plan_sched_custom payload={"task_id": N}
+    - iris_silence    payload={}
+    """
+
+    __tablename__ = "pending_action"
+
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class StateStore:
@@ -54,7 +73,7 @@ class StateStore:
         message_id: int,
         thread_id: Optional[int] = None,
         kind: Optional[str] = None,
-        status: str = "awaiting_owner",
+        status: str = "awaiting_jmf",
     ) -> TicketTelegramMap:
         with self.session() as s:
             row = s.get(TicketTelegramMap, ticket_id)
@@ -100,7 +119,7 @@ class StateStore:
     def find_awaiting_reply(self, chat_id: int) -> Optional[TicketTelegramMap]:
         """Devuelve el ticket en estado awaiting_reply más reciente para ese chat.
 
-        Permite que OWNER presione ✍️ Responder y luego mande un texto plano
+        Permite que Owner presione ✍️ Responder y luego mande un texto plano
         (sin usar la función Reply nativa de Telegram).
         """
         with self.session() as s:
@@ -115,9 +134,58 @@ class StateStore:
             )
             return s.execute(stmt).scalar_one_or_none()
 
+    # --- Pending actions (callbacks que esperan input) -----------------
+
+    def set_pending_action(self, chat_id: int, action: str, payload: dict | None = None) -> None:
+        import json as _json
+        with self.session() as s:
+            row = s.get(PendingAction, chat_id)
+            if row is None:
+                row = PendingAction(chat_id=chat_id, action=action, payload=_json.dumps(payload or {}))
+                s.add(row)
+            else:
+                row.action = action
+                row.payload = _json.dumps(payload or {})
+                row.created_at = datetime.utcnow()
+            s.commit()
+
+    def pop_pending_action(self, chat_id: int) -> tuple[str, dict] | None:
+        import json as _json
+        with self.session() as s:
+            row = s.get(PendingAction, chat_id)
+            if row is None:
+                return None
+            action = row.action
+            try:
+                payload = _json.loads(row.payload or "{}")
+            except Exception:  # noqa: BLE001
+                payload = {}
+            s.delete(row)
+            s.commit()
+            return action, payload
+
+    def get_pending_action(self, chat_id: int) -> tuple[str, dict] | None:
+        import json as _json
+        with self.session() as s:
+            row = s.get(PendingAction, chat_id)
+            if row is None:
+                return None
+            try:
+                payload = _json.loads(row.payload or "{}")
+            except Exception:  # noqa: BLE001
+                payload = {}
+            return row.action, payload
+
+    def clear_pending_action(self, chat_id: int) -> None:
+        with self.session() as s:
+            row = s.get(PendingAction, chat_id)
+            if row is not None:
+                s.delete(row)
+                s.commit()
+
     def count_pending(self) -> int:
         with self.session() as s:
             stmt = select(TicketTelegramMap).where(
-                TicketTelegramMap.status.in_(("awaiting_owner", "awaiting_reply"))
+                TicketTelegramMap.status.in_(("awaiting_jmf", "awaiting_reply"))
             )
             return len(s.execute(stmt).scalars().all())

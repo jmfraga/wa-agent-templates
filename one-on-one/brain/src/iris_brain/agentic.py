@@ -12,7 +12,7 @@ Decisiones congeladas:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -23,6 +23,75 @@ from .db import get_session
 from .models import Contact, Task, TaskTarget, Thread, Message, MessageDirection
 
 log = logging.getLogger("iris_brain.agentic")
+
+
+# --- Anti-saturación: rate-limit por contacto -------------------------------
+#
+# Reglas (decisión congelada 2026-05-22):
+# - Máximo 2 outbound por contacto en 24h. Al 3ro Iris debe pedir aprobación.
+# - silent_mode=True → NO se envía nada a ese contacto.
+# - paused_until > now() → NO se envía hasta esa fecha.
+# - El counter rolling se resetea cuando outbound_count_reset_at < now() - 24h.
+
+OUTBOUND_RATE_LIMIT_24H = 2
+
+
+def _enforce_outbound_rate_limit(contact_id: int) -> dict[str, Any] | None:
+    """Devuelve dict de error si el envío debe bloquearse; None si está OK.
+
+    Si OK, también incrementa contador y deja last_outbound_at=now.
+    Llamar DENTRO de una sesión propia (esta función abre la suya).
+    """
+    now = datetime.now(timezone.utc)
+    with get_session() as s:
+        c = s.get(Contact, contact_id)
+        if c is None:
+            return {"ok": False, "error": "contacto no existe"}
+        # Silent mode → bloqueo duro
+        if getattr(c, "silent_mode", False):
+            return {
+                "ok": False,
+                "error": "contact_silent_mode",
+                "hint": "El owner silenció a este contacto vía /iris. NO insistas.",
+            }
+        # Pausa explícita
+        paused_until = getattr(c, "paused_until", None)
+        if paused_until is not None:
+            pu = paused_until if paused_until.tzinfo else paused_until.replace(tzinfo=timezone.utc)
+            if pu > now:
+                return {
+                    "ok": False,
+                    "error": "contact_paused",
+                    "paused_until": pu.isoformat(),
+                    "hint": "Contacto pausado por el owner. NO envíes hasta esa fecha.",
+                }
+        # Reset rolling window si pasaron 24h
+        reset_at = getattr(c, "outbound_count_reset_at", None)
+        needs_reset = (
+            reset_at is None
+            or (reset_at if reset_at.tzinfo else reset_at.replace(tzinfo=timezone.utc))
+            < now - timedelta(hours=24)
+        )
+        if needs_reset:
+            c.outbound_count_24h = 0
+            c.outbound_count_reset_at = now
+        # Verificar límite
+        if (c.outbound_count_24h or 0) >= OUTBOUND_RATE_LIMIT_24H:
+            return {
+                "ok": False,
+                "error": "rate_limit_24h_excedido_para_este_contacto",
+                "hint": (
+                    f"Ya enviaste {OUTBOUND_RATE_LIMIT_24H} mensajes a este contacto en las "
+                    "últimas 24h. PIDE aprobación explícita al owner antes de mandar otro."
+                ),
+                "outbound_count_24h": c.outbound_count_24h,
+                "reset_at": (c.outbound_count_reset_at or now).isoformat(),
+            }
+        # OK: incrementar y registrar
+        c.outbound_count_24h = (c.outbound_count_24h or 0) + 1
+        c.last_outbound_at = now
+        return None
+
 
 
 # --- Search -----------------------------------------------------------------
@@ -273,7 +342,21 @@ def send_outbound(task_id: int, target_id: int, body: str) -> dict[str, Any]:
             log.error("send_outbound BLOCKED: target_id=%s es el owner del task %s", target_id, task_id)
             tt.status = "failed"
             return {"ok": False, "error": "target es el owner — no se permite escribirle por WhatsApp"}
+        # Anti-saturación: chequeo + incremento (rate-limit / silent / pause)
+        contact_id_for_limit = int(tt.contact_id)
+    rl = _enforce_outbound_rate_limit(contact_id_for_limit)
+    if rl is not None:
+        log.warning("send_outbound rate-limited contact_id=%s err=%s", contact_id_for_limit, rl)
+        with get_session() as s:
+            tt2 = s.get(TaskTarget, target_id)
+            if tt2 is not None:
+                tt2.status = "failed"
+        return rl
+    with get_session() as s:
         # Resolver/crear thread para este contacto (igual que sessions.open_or_get_thread)
+        c = s.get(Contact, contact_id_for_limit)
+        if c is None:
+            return {"ok": False, "error": "contacto no existe"}
         thread = s.scalar(
             select(Thread)
             .where(Thread.contact_id == c.id)
@@ -397,6 +480,8 @@ def send_outbound_media(
             log.error("send_outbound_media BLOCKED: target_id=%s es el owner", target_id)
             tt.status = "failed"
             return {"ok": False, "error": "target es el owner — no se permite enviar media por WhatsApp"}
+        media_contact_id = int(tt.contact_id)
+        # Anti-saturación se chequea fuera de la sesión actual (abre la suya).
         # Valida que el asset exista (y no esté borrado)
         asset = s.get(__import__("iris_brain.models", fromlist=["MediaAsset"]).MediaAsset, asset_id)
         if asset is None or asset.deleted_at is not None:
@@ -418,6 +503,16 @@ def send_outbound_media(
         thread_id = thread.id
         phone = c.phone
         asset_label = asset.label or asset.filename
+
+    # Anti-saturación: bloquea / incrementa contador. Si bloquea, marca task_target failed.
+    rl = _enforce_outbound_rate_limit(media_contact_id)
+    if rl is not None:
+        log.warning("send_outbound_media rate-limited contact_id=%s err=%s", media_contact_id, rl)
+        with get_session() as s:
+            tt2 = s.get(TaskTarget, target_id)
+            if tt2 is not None:
+                tt2.status = "failed"
+        return rl
 
     # POST a wa-listener (payload extendido con media)
     wa_url = (settings.CONTACT_RELAY_WEBHOOK or "http://localhost:8099/send-to-contact")
@@ -508,13 +603,44 @@ def send_outbound_media(
 
 # --- Owner reporting --------------------------------------------------------
 
-def report_to_owner(text: str, task_id: int | None = None) -> dict[str, Any]:
-    """Manda mensaje a Owner en Telegram via la API directa.
+def report_to_owner(
+    text: str,
+    task_id: int | None = None,
+    contact_phone: str | None = None,
+) -> dict[str, Any]:
+    """Manda mensaje a Owner en Telegram.
 
-    No usa el relay-bot HTTP (sería circular). Va directo a Telegram bot API.
+    Si `contact_phone` viene, intenta primero el relay-bot HTTP
+    `/report-to-owner` para que el mensaje se mande CON inline_keyboard
+    (botones rápidos: Responder / Te confirmo más tarde / No info / Silenciar /
+    Cerrar). Si el relay-bot no responde, hace fallback a Telegram directo
+    (sin botones).
     """
     if not text or not text.strip():
         return {"ok": False, "error": "text vacío"}
+
+    # Path 1: con contact_phone → relay-bot con keyboard
+    if contact_phone:
+        relay_url = getattr(settings, "JMF_RELAY_WEBHOOK", None)
+        if relay_url:
+            # JMF_RELAY_WEBHOOK apunta a /send-to-jmf; reemplazamos el último segmento.
+            base = relay_url.rsplit("/", 1)[0]
+            url = f"{base}/report-to-owner"
+            payload: dict[str, Any] = {
+                "text": text,
+                "contact_phone": contact_phone,
+            }
+            if task_id is not None:
+                payload["task_id"] = task_id
+            try:
+                with httpx.Client(timeout=10) as c:
+                    r = c.post(url, json=payload)
+                    r.raise_for_status()
+                return {"ok": True, "via": "relay-bot"}
+            except httpx.HTTPError as e:
+                log.warning("report_to_owner relay-bot falló (%s) — fallback a Telegram directo", e)
+
+    # Path 2: fallback / texto plano vía Telegram directo
     bot_token = settings.TELEGRAM_BOT_TOKEN if hasattr(settings, "TELEGRAM_BOT_TOKEN") else None
     chat_id = settings.TELEGRAM_CHAT_ID if hasattr(settings, "TELEGRAM_CHAT_ID") else None
     if not bot_token or not chat_id:
@@ -529,10 +655,132 @@ def report_to_owner(text: str, task_id: int | None = None) -> dict[str, Any]:
                 data={"chat_id": chat_id, "text": prefix + text, "parse_mode": "HTML"},
             )
             r.raise_for_status()
-        return {"ok": True}
+        return {"ok": True, "via": "telegram_direct"}
     except httpx.HTTPError as e:
         log.exception("report_to_owner failed")
         return {"ok": False, "error": str(e)}
+
+
+def report_plan_to_owner(task_id: int, summary: str, plan_text: str) -> dict[str, Any]:
+    """Manda preview del plan a Owner con keyboard inline (Send / Schedule / Edit / Cancel).
+
+    Llama al relay-bot. Si no está disponible, fallback a `report_to_owner`
+    (sin botones) para que Owner al menos vea el plan.
+    """
+    relay_url = getattr(settings, "JMF_RELAY_WEBHOOK", None)
+    if relay_url:
+        base = relay_url.rsplit("/", 1)[0]
+        url = f"{base}/report-plan-to-owner"
+        try:
+            with httpx.Client(timeout=10) as c:
+                r = c.post(url, json={"task_id": task_id, "summary": summary, "plan_text": plan_text})
+                r.raise_for_status()
+            return {"ok": True, "via": "relay-bot"}
+        except httpx.HTTPError as e:
+            log.warning("report_plan_to_owner relay-bot falló (%s)", e)
+    # Fallback
+    body = f"<b>Plan task #{task_id}</b>\n{summary}\n\n{plan_text}\n\n(El bot no pudo renderizar botones — usa /tasks o el panel.)"
+    return report_to_owner(body, task_id=task_id)
+
+
+# --- Silenciar / cerrar conversación con contacto ---------------------------
+
+def silence_contact(contact_phone: str, on: bool = True) -> dict[str, Any]:
+    """Marca un contacto con silent_mode=on. Si on=True, Iris ya no le contestará."""
+    from .sessions import sanitize_phone
+
+    p = sanitize_phone(contact_phone)
+    with get_session() as s:
+        c = s.scalar(select(Contact).where(Contact.phone == p))
+        if c is None:
+            return {"ok": False, "error": "contacto no existe", "phone": p}
+        c.silent_mode = bool(on)
+        return {
+            "ok": True,
+            "phone": p,
+            "contact_id": c.id,
+            "name": c.name,
+            "silent_mode": c.silent_mode,
+        }
+
+
+def pause_contact(contact_phone: str, hours: int) -> dict[str, Any]:
+    """Pausa outbound a un contacto por N horas (None para limpiar)."""
+    from .sessions import sanitize_phone
+
+    p = sanitize_phone(contact_phone)
+    with get_session() as s:
+        c = s.scalar(select(Contact).where(Contact.phone == p))
+        if c is None:
+            return {"ok": False, "error": "contacto no existe", "phone": p}
+        if hours and hours > 0:
+            c.paused_until = datetime.now(timezone.utc) + timedelta(hours=int(hours))
+        else:
+            c.paused_until = None
+        return {
+            "ok": True,
+            "phone": p,
+            "contact_id": c.id,
+            "paused_until": c.paused_until.isoformat() if c.paused_until else None,
+        }
+
+
+def close_conversation_with_contact(contact_phone: str) -> dict[str, Any]:
+    """Cierra la conversación con un contacto desde el menú del owner.
+
+    Efectos:
+    - notes_append con timestamp [closed by owner YYYY-MM-DD].
+    - Cancela tasks activas que tengan a este contacto como target pending/sent.
+    """
+    from .sessions import sanitize_phone
+
+    p = sanitize_phone(contact_phone)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cancelled_tasks: list[int] = []
+    with get_session() as s:
+        c = s.scalar(select(Contact).where(Contact.phone == p))
+        if c is None:
+            return {"ok": False, "error": "contacto no existe", "phone": p}
+        line = f"[{stamp}] closed by owner"
+        c.notes = f"{c.notes}\n{line}" if c.notes else line
+        # Cancelar task_targets pendientes para este contacto + sus tasks
+        from sqlalchemy import update as sa_update
+        s.execute(
+            sa_update(TaskTarget)
+            .where(TaskTarget.contact_id == c.id, TaskTarget.status.in_(["pending", "sent"]))
+            .values(status="cancelled")
+        )
+        task_ids = list(
+            s.scalars(
+                select(TaskTarget.task_id)
+                .where(TaskTarget.contact_id == c.id)
+                .distinct()
+            )
+        )
+        for tid in task_ids:
+            t = s.get(Task, tid)
+            if t is not None and t.status not in ("complete", "cancelled"):
+                # ¿Quedan targets activos?
+                from sqlalchemy import func as sa_func
+                active_left = s.scalar(
+                    select(sa_func.count())
+                    .select_from(TaskTarget)
+                    .where(
+                        TaskTarget.task_id == tid,
+                        TaskTarget.status.in_(["pending", "sent"]),
+                    )
+                ) or 0
+                if active_left == 0:
+                    t.status = "cancelled"
+                    t.completed_at = datetime.now(timezone.utc)
+                    cancelled_tasks.append(tid)
+        return {
+            "ok": True,
+            "phone": p,
+            "contact_id": c.id,
+            "name": c.name,
+            "cancelled_tasks": cancelled_tasks,
+        }
 
 
 # --- Forward owner answer (Phase 1c.fix) ------------------------------------
@@ -550,7 +798,6 @@ def forward_owner_answer(contact_phone: str, answer_text: str) -> dict[str, Any]
     Returns {ok, thread_id?, contact_name?, error?, warning?}.
     """
     from .sessions import sanitize_phone
-    from datetime import timedelta
 
     if not contact_phone or not contact_phone.strip():
         return {"ok": False, "error": "contact_phone vacío"}

@@ -15,7 +15,7 @@ TOOLS: list[dict] = [
     {
         "name": "lookup_kb_fact",
         "description": (
-            "Consulta información de cursos vigentes del Dr. Fraga (fechas, precios, modalidad, "
+            "Consulta información de cursos vigentes del the owner (fechas, precios, modalidad, "
             "duración, cupos, links, contactos). DEBES llamar esta tool ANTES de responder cualquier "
             "pregunta sobre cursos — nunca improvises.\n\n"
             "Slugs disponibles:\n"
@@ -94,7 +94,7 @@ TOOLS: list[dict] = [
             "- Te dio contexto útil para futuras conversaciones → notes_append.\n\n"
             "kinds válidos: paciente, prospecto_curso, asesoria, colega, amigo, familia, otro.\n\n"
             "Si el contacto NO tiene nombre todavía, PRESENTATE y pregunta el nombre antes de "
-            "abrir tickets de citas o cursos: 'Hola, soy Iris, asistente del Dr. Fraga. ¿Con quién "
+            "abrir tickets de citas o cursos: 'Hola, soy Iris, asistente del the owner. ¿Con quién "
             "tengo el gusto?'. Una vez te lo diga, llama esta tool con name.\n\n"
             "notes_append agrega texto al campo notes existente (no lo reemplaza). Usa frases cortas. "
             "Ejemplos buenos: 'hija de paciente Sra. González', 'instructora SimAcademy 2025', "
@@ -224,19 +224,50 @@ TOOLS: list[dict] = [
         "name": "report_to_owner",
         "description": (
             "Manda un mensaje a Owner en Telegram (NO en WhatsApp). Úsalo para reportar:\n"
-            "- Plan listo, pidiendo confirmación.\n"
+            "- Cuando un usuario hace una pregunta que requiere al doctor (pasa `contact_phone`).\n"
             "- Confirmaciones de envío exitoso.\n"
             "- Cuando un destinatario responde (en vivo, una respuesta a la vez).\n"
             "- Cuando una task se completa.\n\n"
-            "Mantén el reporte breve (1-3 líneas). Útil para mantener a Owner al tanto sin spam."
+            "**IMPORTANTE — `contact_phone` opcional:** Si estás reportando una PREGUNTA o "
+            "DUDA que un usuario hizo, pasa `contact_phone` para que Owner reciba el reporte CON "
+            "BOTONES rápidos (Responder / Te confirmo más tarde / No info / Silenciar / Cerrar). "
+            "Si solo estás dando un status update general, omítelo.\n\n"
+            "Mantén el reporte breve (1-3 líneas)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "text": {"type": "string", "description": "El mensaje al chat de Telegram de Owner."},
                 "task_id": {"type": "integer", "description": "Opcional: contexto del task relacionado."},
+                "contact_phone": {
+                    "type": "string",
+                    "description": (
+                        "OPCIONAL pero IMPORTANTE cuando reportas una pregunta de usuario. "
+                        "Phone del contacto que hizo la pregunta. Activa el menú de botones rápidos en Telegram."
+                    ),
+                },
             },
             "required": ["text"],
+        },
+    },
+    {
+        "name": "report_plan_to_owner",
+        "description": (
+            "Manda preview del PLAN agéntico al owner por Telegram CON botones inline "
+            "(✅ Enviar ahora / 📅 Programar / ✏️ Cambiar texto / ❌ Cancelar). "
+            "Úsalo DESPUÉS de `create_task` cuando quieras que Owner confirme antes de enviar. "
+            "task_id viene de create_task.\n\n"
+            "summary: 1-2 líneas describiendo qué se va a mandar.\n"
+            "plan_text: el texto completo del plan (targets + mensaje propuesto), formateado HTML para Telegram."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer"},
+                "summary": {"type": "string"},
+                "plan_text": {"type": "string"},
+            },
+            "required": ["task_id", "summary", "plan_text"],
         },
     },
     {
@@ -559,7 +590,18 @@ def execute(name: str, args: dict[str, Any]) -> dict[str, Any]:
             return agentic.send_outbound(int(args["task_id"]), int(args["target_id"]), args["body"])
         if name == "report_to_owner":
             from . import agentic
-            return agentic.report_to_owner(args["text"], args.get("task_id"))
+            return agentic.report_to_owner(
+                args["text"],
+                args.get("task_id"),
+                contact_phone=args.get("contact_phone"),
+            )
+        if name == "report_plan_to_owner":
+            from . import agentic
+            return agentic.report_plan_to_owner(
+                int(args["task_id"]),
+                args["summary"],
+                args["plan_text"],
+            )
         if name == "list_active_tasks":
             from . import agentic
             return agentic.list_active_tasks(args.get("owner_id"), int(args.get("limit", 20)))

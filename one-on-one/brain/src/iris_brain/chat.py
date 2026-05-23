@@ -203,10 +203,87 @@ def handle_message(
     # 3.5 Modo owner — Owner dicta instrucciones (agéntico). Bypass safety + intent classify.
     # Iris responde con tools agentic (search_contacts, create_task, send_outbound, etc).
     contact_kind = None
+    contact_silent_mode = False
     with get_session() as s:
         c = s.get(Contact, contact_id)
         if c is not None:
             contact_kind = c.kind.value if c.kind else None
+            contact_silent_mode = bool(getattr(c, "silent_mode", False))
+
+    # 3.6 Pausa global o silent_mode global / silent_mode por contacto.
+    # NO aplica al owner — Owner siempre puede dictar instrucciones.
+    if contact_kind != "owner":
+        from datetime import datetime as _dt, timezone as _tz
+        from . import admin as _admin_mod
+
+        paused_until_raw = _admin_mod._get_runtime("iris_paused_until")
+        if paused_until_raw:
+            try:
+                pu = _dt.fromisoformat(paused_until_raw.replace("Z", "+00:00"))
+                if pu.tzinfo is None:
+                    pu = pu.replace(tzinfo=_tz.utc)
+                if pu > _dt.now(_tz.utc):
+                    log.info("iris paused until %s — skipping reply para phone=%s", pu.isoformat(), contact_phone)
+                    return {
+                        "ok": True,
+                        "thread_id": thread_id,
+                        "contact_id": contact_id,
+                        "intent": "iris_paused",
+                        "intent_confidence": 1.0,
+                        "safety": None,
+                        "ticket_id": None,
+                        "reply": "",
+                        "model": "iris_paused",
+                        "paused_until": pu.isoformat(),
+                    }
+            except ValueError:
+                log.warning("iris_paused_until inválido: %r", paused_until_raw)
+
+        if contact_silent_mode:
+            # Iris reporta entrante al owner pero NO responde al contacto.
+            try:
+                from . import agentic as _agentic
+                _agentic.report_to_owner(
+                    f"🔇 <b>{cname or cphone}</b> (silent_mode) escribió:\n<blockquote>{text[:300]}</blockquote>",
+                    contact_phone=cphone,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("silent_mode report_to_owner falló")
+            return {
+                "ok": True,
+                "thread_id": thread_id,
+                "contact_id": contact_id,
+                "intent": "silent_mode_contact",
+                "intent_confidence": 1.0,
+                "safety": None,
+                "ticket_id": None,
+                "reply": "",
+                "model": "silent_mode_contact",
+            }
+
+        # silent_mode_global → Iris reporta al owner pero no contesta.
+        silent_global = (_admin_mod._get_runtime("iris_silent_mode_global") or "").lower() == "true"
+        if silent_global:
+            try:
+                from . import agentic as _agentic
+                _agentic.report_to_owner(
+                    f"🔕 (global silent) <b>{cname or cphone}</b>:\n<blockquote>{text[:300]}</blockquote>",
+                    contact_phone=cphone,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("silent_mode_global report_to_owner falló")
+            return {
+                "ok": True,
+                "thread_id": thread_id,
+                "contact_id": contact_id,
+                "intent": "silent_mode_global",
+                "intent_confidence": 1.0,
+                "safety": None,
+                "ticket_id": None,
+                "reply": "",
+                "model": "silent_mode_global",
+            }
+
     if contact_kind == "owner":
         # Nota: la ingesta de media del owner por WhatsApp se hace ahora en el
         # wa-listener (descarga el blob vía Baileys y lo sube a /media/upload).
@@ -371,7 +448,7 @@ def handle_message(
                     f"de tipo {intent} con Owner. Solo responde al usuario con una frase puente "
                     f"breve (1-2 líneas), personalizada con su nombre si lo sabes, en tono cálido "
                     f"de Iris. Ejemplos: 'Gracias {{nombre}}, déjame checar con el doctor', "
-                    f"'Va, paso el contexto al Dr. Fraga y te confirmo en cuanto sepa', etc. Varía.]"
+                    f"'Va, paso el contexto al the owner y te confirmo en cuanto sepa', etc. Varía.]"
                 ),
             }
         reply, usage_out, _stop = _direct_reply(msgs, contact_id=contact_id, thread_id=thread_id)

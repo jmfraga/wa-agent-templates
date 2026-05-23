@@ -19,13 +19,20 @@ from .templates import (
     KIND_ICONS,
     _esc,
     build_inline_keyboard,
+    build_iris_panel_keyboard,
+    build_plan_keyboard,
+    build_plan_schedule_submenu,
+    build_user_question_keyboard,
     render_approved,
     render_closed,
+    render_iris_panel,
+    render_plan_message,
     render_reply_prompt,
     render_reply_sent,
     render_thread_messages,
     render_ticket_message,
     render_urgent_banner,
+    render_user_question,
 )
 
 log = logging.getLogger("iris_relay.telegram")
@@ -148,6 +155,72 @@ class BrainClient:
         r.raise_for_status()
         return r.json()
 
+    # --- Feature 1/2/3 endpoints (brain) -------------------------------
+
+    def owner_forward_answer(self, contact_phone: str, answer_text: str) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/owner/forward-answer"
+        r = self.http.post(
+            url,
+            json={"contact_phone": contact_phone, "answer_text": answer_text},
+            timeout=self.timeout,
+        )
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
+    def silence_contact(self, contact_phone: str, on: bool = True) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/contacts/{contact_phone}/silence"
+        r = self.http.post(url, json={"on": on}, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
+    def close_conversation(self, contact_phone: str) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/contacts/{contact_phone}/close-conversation"
+        r = self.http.post(url, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
+    def iris_pause(self, duration: str) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/iris/pause"
+        r = self.http.post(url, json={"duration": duration}, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
+    def iris_status(self) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/iris/status"
+        r = self.http.get(url, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
+    def iris_silent_toggle(self) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/iris/silent-mode-toggle"
+        r = self.http.post(url, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
+    def iris_active_conversations(self) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/iris/active-conversations"
+        r = self.http.get(url, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
+    def task_execute(self, task_id: int, force: bool = False) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/tasks/{task_id}/execute"
+        r = self.http.post(url, params={"force": str(force).lower()}, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
+    def task_cancel(self, task_id: int) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/tasks/{task_id}/cancel"
+        r = self.http.post(url, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
+    def task_patch(self, task_id: int, **fields: Any) -> dict[str, Any]:
+        url = f"{self.settings.brain_url.rstrip('/')}/tasks/{task_id}/patch"
+        r = self.http.post(url, json=fields, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
 
 class TelegramRelay:
     """Orchestrates ticket send + callbacks + reply correlation.
@@ -193,6 +266,32 @@ class TelegramRelay:
         if payload.get("urgent"):
             self.telegram.send_message(chat_id, render_urgent_banner(payload))
         return {"telegram_message_id": message_id, "ticket_id": ticket_id}
+
+    def send_report_to_owner(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Feature 1: pregunta de usuario → mensaje a Owner con botones rápidos."""
+        chat_id = self.settings.telegram_chat_id
+        text = payload.get("text") or ""
+        contact_phone = payload.get("contact_phone")
+        task_id = payload.get("task_id")
+        if contact_phone:
+            body = render_user_question(text, contact_phone, task_id=task_id)
+            markup = build_user_question_keyboard(contact_phone)
+            sent = self.telegram.send_message(chat_id, body, reply_markup=markup)
+        else:
+            prefix = f"🤖 <b>Iris</b> · task #{task_id}\n" if task_id else "🤖 <b>Iris</b>\n"
+            sent = self.telegram.send_message(chat_id, prefix + text)
+        return {"telegram_message_id": sent.get("message_id")}
+
+    def send_plan_to_owner(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Feature 2: plan agéntico → preview con botones inline."""
+        chat_id = self.settings.telegram_chat_id
+        task_id = int(payload["task_id"])
+        summary = payload.get("summary") or ""
+        plan_text = payload.get("plan_text") or ""
+        body = render_plan_message(task_id, summary, plan_text)
+        markup = build_plan_keyboard(task_id)
+        sent = self.telegram.send_message(chat_id, body, reply_markup=markup)
+        return {"telegram_message_id": sent.get("message_id"), "task_id": task_id}
 
     # --- Polling loop --------------------------------------------------
 
@@ -272,6 +371,15 @@ class TelegramRelay:
                 self.telegram.send_message(chat_id, render_thread_messages(thread_id, messages))
                 self.telegram.answer_callback_query(cb_id)
 
+            elif action == "usr" and len(parts) >= 3:
+                self._handle_callback_usr(cb_id, chat_id, message_id, parts)
+
+            elif action == "plan" and len(parts) >= 3:
+                self._handle_callback_plan(cb_id, chat_id, message_id, parts)
+
+            elif action == "iris" and len(parts) >= 2:
+                self._handle_callback_iris(cb_id, chat_id, message_id, parts)
+
             else:
                 self.telegram.answer_callback_query(cb_id, "Acción desconocida")
         except Exception as e:  # noqa: BLE001
@@ -280,6 +388,226 @@ class TelegramRelay:
                 self.telegram.answer_callback_query(cb_id, f"Error: {e}")
             except Exception:  # noqa: BLE001
                 pass
+
+    # --- Feature 1: callbacks usr:* (pregunta de usuario) --------------
+
+    _USR_LATER_MSG = (
+        "Por el momento el doctor está atendiendo otros pendientes — te confirmo en "
+        "unas horas, gracias por tu paciencia 🙏"
+    )
+    _USR_NO_INFO_MSG = (
+        "Por el momento no tengo esa información, déjame consulto y te aviso si encuentro algo."
+    )
+
+    def _handle_callback_usr(self, cb_id: str, chat_id: int, message_id: int, parts: list[str]) -> None:
+        sub = parts[1]
+        phone = ":".join(parts[2:])  # phones no llevan ':' pero por si acaso
+        if sub == "reply":
+            self.state.set_pending_action(int(chat_id), "usr_reply", {"contact_phone": phone})
+            self.telegram.edit_message_text(
+                chat_id, message_id,
+                f"✍️ Escribe la respuesta para <code>{_esc(phone)}</code> en este chat. "
+                "Iris la reenviará al usuario."
+            )
+            self.telegram.answer_callback_query(cb_id, "Esperando tu mensaje…")
+            return
+
+        if sub == "later":
+            r = self.brain.owner_forward_answer(phone, self._USR_LATER_MSG)
+            if r.get("ok"):
+                self.telegram.edit_message_text(chat_id, message_id, "✅ Le dije que confirmas más tarde.")
+                self.telegram.answer_callback_query(cb_id, "Enviado")
+            else:
+                self.telegram.answer_callback_query(cb_id, f"Error: {r.get('error')}")
+            return
+
+        if sub == "no_info":
+            r = self.brain.owner_forward_answer(phone, self._USR_NO_INFO_MSG)
+            if r.get("ok"):
+                self.telegram.edit_message_text(chat_id, message_id, "✅ Le dije que no tienes info.")
+                self.telegram.answer_callback_query(cb_id, "Enviado")
+            else:
+                self.telegram.answer_callback_query(cb_id, f"Error: {r.get('error')}")
+            return
+
+        if sub == "silence":
+            r = self.brain.silence_contact(phone, on=True)
+            if r.get("ok"):
+                self.telegram.edit_message_text(chat_id, message_id, "🔇 Iris no responderá a este contacto.")
+                self.telegram.answer_callback_query(cb_id, "Silenciado")
+            else:
+                self.telegram.answer_callback_query(cb_id, f"Error: {r.get('error')}")
+            return
+
+        if sub == "close":
+            r = self.brain.close_conversation(phone)
+            if r.get("ok"):
+                self.telegram.edit_message_text(chat_id, message_id, "✅ Conversación cerrada.")
+                self.telegram.answer_callback_query(cb_id, "Cerrada")
+            else:
+                self.telegram.answer_callback_query(cb_id, f"Error: {r.get('error')}")
+            return
+
+        self.telegram.answer_callback_query(cb_id, "Acción usr desconocida")
+
+    # --- Feature 2: callbacks plan:* (preview de plan agéntico) --------
+
+    def _handle_callback_plan(self, cb_id: str, chat_id: int, message_id: int, parts: list[str]) -> None:
+        sub = parts[1]
+        try:
+            task_id = int(parts[2])
+        except ValueError:
+            self.telegram.answer_callback_query(cb_id, "task_id inválido")
+            return
+
+        if sub == "send":
+            r = self.brain.task_execute(task_id, force=True)
+            sent = r.get("sent", 0)
+            failed = r.get("failed", 0)
+            self.telegram.edit_message_text(
+                chat_id, message_id,
+                f"✅ <b>Plan ejecutado · task #{task_id}</b>\nEnviados: {sent} · Fallidos: {failed}",
+            )
+            self.telegram.answer_callback_query(cb_id, "Enviado")
+            return
+
+        if sub == "schedule":
+            self.telegram.edit_message_text(
+                chat_id, message_id,
+                f"📅 ¿Cuándo enviar el plan task #{task_id}?",
+                reply_markup=build_plan_schedule_submenu(task_id),
+            )
+            self.telegram.answer_callback_query(cb_id)
+            return
+
+        if sub == "sched_pick" and len(parts) >= 4:
+            choice = parts[3]
+            if choice == "custom":
+                self.state.set_pending_action(int(chat_id), "plan_sched_custom", {"task_id": task_id})
+                self.telegram.edit_message_text(
+                    chat_id, message_id,
+                    f"⏰ Escribe la fecha/hora (formato <code>YYYY-MM-DD HH:MM</code>, hora local) para task #{task_id}.",
+                )
+                self.telegram.answer_callback_query(cb_id, "Esperando fecha…")
+                return
+            sched_iso = self._resolve_schedule_choice(choice)
+            if not sched_iso:
+                self.telegram.answer_callback_query(cb_id, "Opción desconocida")
+                return
+            self.brain.task_patch(task_id, scheduled_at=sched_iso)
+            self.telegram.edit_message_text(
+                chat_id, message_id,
+                f"📅 Programada para <code>{_esc(sched_iso)}</code> — el worker la disparará automáticamente.",
+            )
+            self.telegram.answer_callback_query(cb_id, "Programada")
+            return
+
+        if sub == "back":
+            # Re-mostrar keyboard de plan (sin re-render del texto original)
+            self.telegram.edit_message_text(
+                chat_id, message_id,
+                f"🎯 Plan task #{task_id} — elige acción:",
+                reply_markup=build_plan_keyboard(task_id),
+            )
+            self.telegram.answer_callback_query(cb_id)
+            return
+
+        if sub == "edit":
+            self.state.set_pending_action(int(chat_id), "plan_edit", {"task_id": task_id})
+            self.telegram.edit_message_text(
+                chat_id, message_id,
+                f"✍️ Escribe el nuevo texto para task #{task_id}. Iris lo aplicará y te muestra el plan revisado.",
+            )
+            self.telegram.answer_callback_query(cb_id, "Esperando texto…")
+            return
+
+        if sub == "cancel":
+            self.brain.task_cancel(task_id)
+            self.telegram.edit_message_text(chat_id, message_id, f"❌ Plan task #{task_id} cancelado.")
+            self.telegram.answer_callback_query(cb_id, "Cancelado")
+            return
+
+        self.telegram.answer_callback_query(cb_id, "Acción plan desconocida")
+
+    def _resolve_schedule_choice(self, choice: str) -> str | None:
+        """Mapea tomorrow_9/mon_9/tue_9/fri_9 → ISO 8601 UTC."""
+        from datetime import datetime, time, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        # Suponemos hora local CDMX (UTC-6) — 9am local = 15:00 UTC.
+        target_hour_utc = 15
+        if choice == "tomorrow_9":
+            d = (now + timedelta(days=1)).date()
+        elif choice in {"mon_9", "tue_9", "fri_9"}:
+            wd_map = {"mon_9": 0, "tue_9": 1, "fri_9": 4}
+            target_wd = wd_map[choice]
+            days_ahead = (target_wd - now.weekday()) % 7
+            if days_ahead == 0:
+                days_ahead = 7  # próxima semana
+            d = (now + timedelta(days=days_ahead)).date()
+        else:
+            return None
+        dt = datetime.combine(d, time(hour=target_hour_utc, minute=0, tzinfo=timezone.utc))
+        return dt.isoformat()
+
+    # --- Feature 3: callbacks iris:* (control panel) -------------------
+
+    def _handle_callback_iris(self, cb_id: str, chat_id: int, message_id: int, parts: list[str]) -> None:
+        sub = parts[1]
+        if sub == "pause" and len(parts) >= 3:
+            duration = parts[2]
+            r = self.brain.iris_pause(duration)
+            pu = r.get("paused_until")
+            self.telegram.edit_message_text(
+                chat_id, message_id,
+                f"🔇 Iris pausada hasta <code>{_esc(pu)}</code>." if pu else "🔇 Iris pausada.",
+            )
+            self.telegram.answer_callback_query(cb_id, "Pausada")
+            return
+
+        if sub == "resume":
+            self.brain.iris_pause("off")
+            self.telegram.edit_message_text(chat_id, message_id, "▶️ Iris reactivada.")
+            self.telegram.answer_callback_query(cb_id, "Activa")
+            return
+
+        if sub == "list_active":
+            data = self.brain.iris_active_conversations()
+            tasks = data.get("tasks", [])
+            if not tasks:
+                body = "📊 <b>Conversaciones activas</b>\n\n(ninguna)"
+            else:
+                lines = ["📊 <b>Conversaciones activas</b>", ""]
+                for t in tasks:
+                    contacts = ", ".join(t.get("contacts") or []) or "(sin contactos)"
+                    lines.append(
+                        f"• <b>#{t['task_id']}</b> [{_esc(t.get('status', '?'))}] {_esc(t.get('summary', ''))[:80]}\n  → {_esc(contacts)}"
+                    )
+                body = "\n".join(lines)
+            self.telegram.edit_message_text(chat_id, message_id, body)
+            self.telegram.answer_callback_query(cb_id)
+            return
+
+        if sub == "silence_contact":
+            self.state.set_pending_action(int(chat_id), "iris_silence", {})
+            self.telegram.edit_message_text(
+                chat_id, message_id,
+                "✍️ Pásame el teléfono (10-15 dígitos) del contacto a silenciar.",
+            )
+            self.telegram.answer_callback_query(cb_id, "Esperando…")
+            return
+
+        if sub == "silent_mode_toggle":
+            r = self.brain.iris_silent_toggle()
+            new = r.get("silent_mode_global")
+            self.telegram.edit_message_text(
+                chat_id, message_id,
+                f"⚙️ Modo silencioso global: <b>{'ON' if new else 'OFF'}</b>.\n"
+                f"{'Iris solo reportará al owner, no contestará a usuarios.' if new else 'Iris responde a usuarios normalmente.'}",
+            )
+            self.telegram.answer_callback_query(cb_id)
+            return
+
+        self.telegram.answer_callback_query(cb_id, "Acción iris desconocida")
 
     def _handle_message(self, message: dict[str, Any]) -> None:
         chat = message.get("chat", {})
@@ -321,6 +649,14 @@ class TelegramRelay:
 
         if not body:
             return
+
+        # 2.5. Pending actions de menús inline_keyboard (usr_reply / plan_edit / plan_sched_custom / iris_silence)
+        pending = self.state.get_pending_action(int(chat_id))
+        if pending is not None:
+            action, payload = pending
+            if self._dispatch_pending_action(chat_id, action, payload, body):
+                self.state.clear_pending_action(int(chat_id))
+                return
 
         # 3. Texto plano → si hay ticket awaiting_reply (✍️ Responder fue tocado), envíalo ahí
         row = self.state.find_awaiting_reply(int(chat_id))
@@ -467,10 +803,105 @@ class TelegramRelay:
             log.exception("Failed forwarding Owner reply for ticket %s", row.ticket_id)
             self.telegram.send_message(chat_id, f"❌ Falló enviar la respuesta del ticket #{row.ticket_id}: {e}")
 
+    def _dispatch_pending_action(
+        self, chat_id: int, action: str, payload: dict, body: str
+    ) -> bool:
+        """Devuelve True si consumió el body (pending action ejecutado)."""
+        if action == "usr_reply":
+            phone = payload.get("contact_phone")
+            if not phone:
+                return False
+            try:
+                r = self.brain.owner_forward_answer(phone, body)
+            except Exception as e:  # noqa: BLE001
+                log.exception("usr_reply forward failed")
+                self.telegram.send_message(chat_id, f"❌ No pude reenviar: {e}")
+                return True
+            if r.get("ok"):
+                self.telegram.send_message(
+                    chat_id,
+                    f"✅ Respuesta enviada a <code>{_esc(phone)}</code>.",
+                )
+            else:
+                self.telegram.send_message(chat_id, f"❌ Error: {r.get('error')}")
+            return True
+
+        if action == "iris_silence":
+            phone = body.strip()
+            if not phone:
+                return False
+            try:
+                r = self.brain.silence_contact(phone, on=True)
+            except Exception as e:  # noqa: BLE001
+                self.telegram.send_message(chat_id, f"❌ Error: {e}")
+                return True
+            if r.get("ok"):
+                self.telegram.send_message(
+                    chat_id,
+                    f"🔇 Contacto silenciado: <code>{_esc(phone)}</code>"
+                    + (f" ({_esc(r.get('name') or '')})" if r.get("name") else ""),
+                )
+            else:
+                self.telegram.send_message(chat_id, f"❌ {r.get('error')}")
+            return True
+
+        if action == "plan_sched_custom":
+            task_id = payload.get("task_id")
+            # Parse "YYYY-MM-DD HH:MM" como hora local CDMX (UTC-6).
+            from datetime import datetime, timezone, timedelta
+            try:
+                dt_local = datetime.strptime(body.strip(), "%Y-%m-%d %H:%M")
+            except ValueError:
+                self.telegram.send_message(
+                    chat_id,
+                    "❌ Formato inválido. Usa <code>YYYY-MM-DD HH:MM</code>.",
+                )
+                return False  # mantener pending
+            # Convertir CDMX (UTC-6) → UTC
+            dt_utc = dt_local.replace(tzinfo=timezone(timedelta(hours=-6))).astimezone(timezone.utc)
+            try:
+                self.brain.task_patch(int(task_id), scheduled_at=dt_utc.isoformat())
+            except Exception as e:  # noqa: BLE001
+                self.telegram.send_message(chat_id, f"❌ Error: {e}")
+                return True
+            self.telegram.send_message(
+                chat_id,
+                f"📅 Task #{task_id} programada para <code>{_esc(dt_utc.isoformat())}</code>.",
+            )
+            return True
+
+        if action == "plan_edit":
+            task_id = payload.get("task_id")
+            # Guardamos el nuevo message_template en context. La task se quedará pending
+            # hasta que el owner aprete "✅ Enviar ahora" o programe.
+            try:
+                self.brain.task_patch(int(task_id), message_template=body)
+            except Exception as e:  # noqa: BLE001
+                self.telegram.send_message(chat_id, f"❌ Error: {e}")
+                return True
+            self.telegram.send_message(
+                chat_id,
+                f"✍️ Task #{task_id} actualizada con tu nuevo texto. Pídele a Iris el plan revisado o usa /tasks.",
+            )
+            return True
+
+        return False
+
     def _handle_command(self, chat_id: int, body: str) -> None:
         token = body.split()[0].lower() if body else ""
         if token in {"/start", "/help", "/menu"}:
             self.telegram.send_message(chat_id, self._render_help())
+            return
+        if token == "/iris":
+            try:
+                status = self.brain.iris_status()
+            except Exception as e:  # noqa: BLE001
+                status = {"error": str(e)}
+            self.telegram.send_message(
+                chat_id,
+                render_iris_panel(status),
+                reply_markup=build_iris_panel_keyboard(),
+            )
             return
         if token in {"/pendientes", "/pending"}:
             self._send_pending_tickets(chat_id)
@@ -495,6 +926,7 @@ class TelegramRelay:
             "Soy el puente entre los usuarios/prospectos de WhatsApp y tú. "
             "Cuando llega un ticket nuevo te aviso aquí con botones.\n\n"
             "<b>Comandos:</b>\n"
+            "• /iris — panel de control (pausa, silencio, conversaciones activas)\n"
             "• /pendientes — tickets esperando tu respuesta\n"
             "• /tickets — todos los tickets activos\n"
             "• /stats — métricas del día (mensajes, costo, crisis)\n"

@@ -1,7 +1,7 @@
 """FastAPI server for iris-relay (port 8098).
 
 Endpoints:
-  POST /send-to-owner       — brain pushes a ticket here; we forward to Telegram.
+  POST /send-to-jmf       — brain pushes a ticket here; we forward to Telegram.
   POST /send-to-contact   — explicitly 400, that path is wa-listener's job.
   GET  /health            — liveness + counts.
 """
@@ -20,7 +20,7 @@ from .telegram import TelegramRelay
 log = logging.getLogger("iris_relay.server")
 
 
-class SendToOwnerPayload(BaseModel):
+class SendToJmfPayload(BaseModel):
     ticket_id: int
     thread_id: Optional[int] = None
     kind: str = "otro"
@@ -29,6 +29,18 @@ class SendToOwnerPayload(BaseModel):
     contact_phone: Optional[str] = None
     contact_name: Optional[str] = None
     urgent: bool = False
+
+
+class ReportToOwnerPayload(BaseModel):
+    text: str
+    contact_phone: Optional[str] = None
+    task_id: Optional[int] = None
+
+
+class ReportPlanPayload(BaseModel):
+    task_id: int
+    summary: str
+    plan_text: str
 
 
 def create_app(
@@ -63,12 +75,31 @@ def create_app(
             "tickets_pending": state.count_pending(),
         }
 
-    @app.post("/send-to-owner")
-    def send_to_owner(payload: SendToOwnerPayload) -> dict[str, Any]:
+    @app.post("/send-to-jmf")
+    def send_to_jmf(payload: SendToJmfPayload) -> dict[str, Any]:
         try:
             result = relay.send_ticket(payload.model_dump())
         except Exception as e:  # noqa: BLE001
             log.exception("send_ticket failed")
+            raise HTTPException(status_code=502, detail=f"telegram_send_failed: {e}")
+        return {"ok": True, **result}
+
+    @app.post("/report-to-owner")
+    def report_to_owner_endpoint(payload: ReportToOwnerPayload) -> dict[str, Any]:
+        """Brain llama esto en lugar de Telegram directo cuando quiere mostrar botones."""
+        try:
+            result = relay.send_report_to_owner(payload.model_dump())
+        except Exception as e:  # noqa: BLE001
+            log.exception("report_to_owner failed")
+            raise HTTPException(status_code=502, detail=f"telegram_send_failed: {e}")
+        return {"ok": True, **result}
+
+    @app.post("/report-plan-to-owner")
+    def report_plan_endpoint(payload: ReportPlanPayload) -> dict[str, Any]:
+        try:
+            result = relay.send_plan_to_owner(payload.model_dump())
+        except Exception as e:  # noqa: BLE001
+            log.exception("report_plan failed")
             raise HTTPException(status_code=502, detail=f"telegram_send_failed: {e}")
         return {"ok": True, **result}
 
@@ -78,7 +109,7 @@ def create_app(
             status_code=400,
             detail=(
                 "send-to-contact is handled by wa-listener directly. "
-                "This relay only ships tickets to OWNER on Telegram."
+                "This relay only ships tickets to Owner on Telegram."
             ),
         )
 
