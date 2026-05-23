@@ -145,6 +145,89 @@ def render_approved(ticket_id: int, draft: str) -> str:
     )
 
 
+def build_user_question_keyboard(contact_phone: str) -> dict[str, Any]:
+    """Keyboard para report_to_owner cuando viene contact_phone (Feature 1).
+
+    Callbacks: usr:reply / usr:later / usr:no_info / usr:silence / usr:close.
+    """
+    p = contact_phone
+    return {
+        "inline_keyboard": [
+            [{"text": "💬 Responder con texto", "callback_data": f"usr:reply:{p}"}],
+            [{"text": "📅 Te confirmo más tarde", "callback_data": f"usr:later:{p}"}],
+            [{"text": "🙅 No tengo info", "callback_data": f"usr:no_info:{p}"}],
+            [{"text": "🔇 No responder", "callback_data": f"usr:silence:{p}"}],
+            [{"text": "✅ Cerrar conversación", "callback_data": f"usr:close:{p}"}],
+        ]
+    }
+
+
+def render_user_question(text: str, contact_phone: str, task_id: int | None = None) -> str:
+    head = f"🤖 <b>Iris</b> · task #{task_id}\n" if task_id else "🤖 <b>Iris</b>\n"
+    foot = f"\n<i>contacto:</i> <code>{_esc(contact_phone)}</code>"
+    return head + text + foot
+
+
+def build_plan_keyboard(task_id: int) -> dict[str, Any]:
+    """Keyboard para report_plan_to_owner (Feature 2)."""
+    return {
+        "inline_keyboard": [
+            [{"text": "✅ Enviar ahora", "callback_data": f"plan:send:{task_id}"}],
+            [{"text": "📅 Programar para…", "callback_data": f"plan:schedule:{task_id}"}],
+            [{"text": "✏️ Cambiar texto", "callback_data": f"plan:edit:{task_id}"}],
+            [{"text": "❌ Cancelar", "callback_data": f"plan:cancel:{task_id}"}],
+        ]
+    }
+
+
+def build_plan_schedule_submenu(task_id: int) -> dict[str, Any]:
+    return {
+        "inline_keyboard": [
+            [{"text": "Mañana 9am", "callback_data": f"plan:sched_pick:{task_id}:tomorrow_9"}],
+            [{"text": "Lun 9am", "callback_data": f"plan:sched_pick:{task_id}:mon_9"}],
+            [{"text": "Mar 9am", "callback_data": f"plan:sched_pick:{task_id}:tue_9"}],
+            [{"text": "Vie 9am", "callback_data": f"plan:sched_pick:{task_id}:fri_9"}],
+            [{"text": "⏰ Custom…", "callback_data": f"plan:sched_pick:{task_id}:custom"}],
+            [{"text": "← Volver", "callback_data": f"plan:back:{task_id}"}],
+        ]
+    }
+
+
+def render_plan_message(task_id: int, summary: str, plan_text: str) -> str:
+    return (
+        f"🎯 <b>Plan listo</b> · task #{task_id}\n\n"
+        f"{_esc(summary)}\n"
+        f"─────────\n"
+        f"{plan_text}"
+    )
+
+
+def build_iris_panel_keyboard() -> dict[str, Any]:
+    """Keyboard del comando /iris (Feature 3)."""
+    return {
+        "inline_keyboard": [
+            [{"text": "🔇 Pausar Iris 24h", "callback_data": "iris:pause:24h"}],
+            [{"text": "🔇 Pausar Iris 7 días", "callback_data": "iris:pause:7d"}],
+            [{"text": "▶️ Reactivar Iris", "callback_data": "iris:resume"}],
+            [{"text": "📊 Conversaciones activas", "callback_data": "iris:list_active"}],
+            [{"text": "🔇 Silenciar contacto…", "callback_data": "iris:silence_contact"}],
+            [{"text": "⚙️ Modo silencioso global", "callback_data": "iris:silent_mode_toggle"}],
+        ]
+    }
+
+
+def render_iris_panel(status: dict[str, Any]) -> str:
+    paused = status.get("paused_until")
+    silent_global = bool(status.get("silent_mode_global"))
+    lines = ["🤖 <b>Control de Iris</b>", "─────────"]
+    if paused:
+        lines.append(f"⏸ Pausada hasta: <code>{_esc(str(paused))}</code>")
+    else:
+        lines.append("▶️ Activa")
+    lines.append(f"🔕 Modo silencioso global: {'ON' if silent_global else 'OFF'}")
+    return "\n".join(lines)
+
+
 def render_thread_messages(thread_id: int, messages: list[dict[str, Any]]) -> str:
     if not messages:
         return f"📋 Thread #{thread_id}: (sin mensajes)"

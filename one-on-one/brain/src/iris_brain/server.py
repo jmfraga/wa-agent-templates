@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -1230,6 +1230,152 @@ def admin_metrics_range(request: _FastAPIRequest) -> dict[str, Any]:
 @app.get("/admin/health/components", dependencies=[Depends(require_admin)])
 def admin_health_components() -> dict[str, Any]:
     return admin_mod.health_components()
+
+
+# ---------------------------------------------------------------------------
+# Anti-saturación + control panel /iris (Feature 1,3,4)
+# ---------------------------------------------------------------------------
+
+
+class ForwardAnswerRequest(BaseModel):
+    contact_phone: str
+    answer_text: str
+
+
+@app.post("/owner/forward-answer")
+def owner_forward_answer(req: ForwardAnswerRequest) -> dict[str, Any]:
+    """Reenvía la respuesta del owner (Owner) a un contacto. Llamado desde relay-bot
+    cuando Owner aprieta los botones rápidos del menú usr:* o escribe en pending_reply."""
+    from . import agentic
+    r = agentic.forward_owner_answer(
+        contact_phone=req.contact_phone,
+        answer_text=req.answer_text,
+    )
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("error", "forward_owner_answer failed"))
+    return r
+
+
+class SilenceContactRequest(BaseModel):
+    on: bool = True
+
+
+@app.post("/contacts/{phone}/silence")
+def silence_contact_endpoint(phone: str, req: SilenceContactRequest | None = None) -> dict[str, Any]:
+    from . import agentic
+    on = True if req is None else bool(req.on)
+    r = agentic.silence_contact(phone, on=on)
+    if not r.get("ok"):
+        raise HTTPException(404, r.get("error", "silence failed"))
+    return r
+
+
+@app.post("/contacts/{phone}/close-conversation")
+def close_conversation_endpoint(phone: str) -> dict[str, Any]:
+    from . import agentic
+    r = agentic.close_conversation_with_contact(phone)
+    if not r.get("ok"):
+        raise HTTPException(404, r.get("error", "close failed"))
+    return r
+
+
+class PauseContactRequest(BaseModel):
+    hours: int
+
+
+@app.post("/contacts/{phone}/pause")
+def pause_contact_endpoint(phone: str, req: PauseContactRequest) -> dict[str, Any]:
+    from . import agentic
+    r = agentic.pause_contact(phone, hours=req.hours)
+    if not r.get("ok"):
+        raise HTTPException(404, r.get("error", "pause failed"))
+    return r
+
+
+class IrisPauseRequest(BaseModel):
+    duration: str  # "24h" | "7d" | "off"
+
+
+@app.post("/iris/pause")
+def iris_pause(req: IrisPauseRequest) -> dict[str, Any]:
+    """Pausa global de Iris (no contesta a usuarios no-owner). Persiste en runtime_config."""
+    dur = (req.duration or "").lower().strip()
+    if dur in {"off", "resume", "none", ""}:
+        admin_mod._set_runtime("iris_paused_until", "", updated_by="telegram_menu")
+        return {"ok": True, "paused_until": None}
+    units = {"h": 1, "d": 24}
+    try:
+        n = int(dur[:-1])
+        unit = dur[-1]
+        if unit not in units:
+            raise ValueError
+        hours = n * units[unit]
+    except (ValueError, IndexError):
+        raise HTTPException(400, f"duration inválido: {req.duration} (usa '24h', '7d', 'off')")
+    pu = datetime.now(timezone.utc) + timedelta(hours=hours)
+    admin_mod._set_runtime("iris_paused_until", pu.isoformat(), updated_by="telegram_menu")
+    return {"ok": True, "paused_until": pu.isoformat()}
+
+
+@app.get("/iris/status")
+def iris_status() -> dict[str, Any]:
+    paused = admin_mod._get_runtime("iris_paused_until")
+    silent_global = (admin_mod._get_runtime("iris_silent_mode_global") or "").lower() == "true"
+    paused_dt = None
+    if paused:
+        try:
+            paused_dt = datetime.fromisoformat(paused.replace("Z", "+00:00"))
+        except ValueError:
+            paused_dt = None
+    is_paused = bool(paused_dt and paused_dt > datetime.now(timezone.utc))
+    return {
+        "ok": True,
+        "paused_until": paused if is_paused else None,
+        "is_paused": is_paused,
+        "silent_mode_global": silent_global,
+    }
+
+
+@app.post("/iris/silent-mode-toggle")
+def iris_silent_mode_toggle() -> dict[str, Any]:
+    cur = (admin_mod._get_runtime("iris_silent_mode_global") or "").lower() == "true"
+    new = not cur
+    admin_mod._set_runtime("iris_silent_mode_global", "true" if new else "false", updated_by="telegram_menu")
+    return {"ok": True, "silent_mode_global": new}
+
+
+@app.get("/iris/active-conversations")
+def iris_active_conversations(limit: int = 20) -> dict[str, Any]:
+    """Resumen para el botón 'Conversaciones activas' del /iris control panel."""
+    from .models import Task, TaskTarget
+    with get_session() as s:
+        rows = list(
+            s.scalars(
+                select(Task)
+                .where(Task.status.in_(["pending", "in_progress", "awaiting_responses"]))
+                .order_by(Task.updated_at.desc())
+                .limit(max(1, min(limit, 100)))
+            )
+        )
+        out = []
+        for t in rows:
+            contacts_for_task: list[str] = []
+            tt_rows = list(s.scalars(select(TaskTarget).where(TaskTarget.task_id == t.id)))
+            for tt in tt_rows:
+                c = s.get(Contact, tt.contact_id)
+                if c is not None:
+                    contacts_for_task.append(c.name or c.phone or f"#{c.id}")
+            out.append({
+                "task_id": t.id,
+                "summary": t.summary,
+                "status": t.status,
+                "contacts": contacts_for_task,
+                "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+            })
+    return {"tasks": out, "count": len(out)}
+
+
+# ---------------------------------------------------------------------------
 
 
 def main() -> None:
