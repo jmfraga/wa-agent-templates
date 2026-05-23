@@ -7,11 +7,19 @@
       <h1 class="text-xl font-semibold text-slate-900">Tareas agénticas</h1>
       <p class="text-sm text-slate-500">Tasks que Iris está coordinando por ti. Outbound + tracking de respuestas.</p>
     </div>
-    <div class="flex gap-2 text-sm">
-      <a href="/admin/tasks" class="px-3 py-1.5 rounded-md border {% if not status %}bg-slate-900 text-white{% else %}bg-white text-slate-700{% endif %}">Todas</a>
-      <a href="/admin/tasks?status=awaiting_responses" class="px-3 py-1.5 rounded-md border {% if status == 'awaiting_responses' %}bg-slate-900 text-white{% else %}bg-white text-slate-700{% endif %}">Esperando respuestas</a>
-      <a href="/admin/tasks?status=complete" class="px-3 py-1.5 rounded-md border {% if status == 'complete' %}bg-slate-900 text-white{% else %}bg-white text-slate-700{% endif %}">Completas</a>
-      <a href="/admin/tasks?status=cancelled" class="px-3 py-1.5 rounded-md border {% if status == 'cancelled' %}bg-slate-900 text-white{% else %}bg-white text-slate-700{% endif %}">Canceladas</a>
+    <div class="flex flex-wrap gap-2 text-sm">
+      <a href="/admin/tasks"
+         class="px-3 py-1.5 rounded-md border {% if not status %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 hover:bg-slate-50{% endif %}">
+        Todas
+        <span class="ml-1 text-xs {% if not status %}text-slate-300{% else %}text-slate-400{% endif %}">({{ task_counts['__all__'] }})</span>
+      </a>
+      {% for st_value, st_label in task_statuses %}
+      <a href="/admin/tasks?status={{ st_value }}"
+         class="px-3 py-1.5 rounded-md border {% if status == st_value %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 hover:bg-slate-50{% endif %}">
+        {{ st_label }}
+        <span class="ml-1 text-xs {% if status == st_value %}text-slate-300{% else %}text-slate-400{% endif %}">({{ task_counts.get(st_value, 0) }})</span>
+      </a>
+      {% endfor %}
     </div>
   </header>
 
@@ -25,12 +33,17 @@
   <details {% if loop.first %}open{% endif %} class="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
     <summary class="cursor-pointer px-4 py-3 bg-slate-50 hover:bg-slate-100 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        {% set status_color = {'pending':'amber','in_progress':'blue','awaiting_responses':'sky','complete':'emerald','cancelled':'slate'} %}
+        {% set status_color = {'pending':'amber','in_progress':'blue','awaiting_responses':'sky','complete':'emerald','cancelled':'slate','failed':'rose'} %}
         {% set c = status_color.get(t.status, 'slate') %}
         <span class="inline-block w-2 h-2 rounded-full bg-{{ c }}-500"></span>
         <span class="font-mono text-xs text-slate-500">#{{ t.id }}</span>
         <span class="font-medium text-slate-900">{{ t.summary[:80] }}</span>
         <span class="text-xs px-2 py-0.5 rounded-full bg-{{ c }}-50 text-{{ c }}-700">{{ t.status }}</span>
+        {% if t._is_scheduled_future %}
+        <span class="text-xs px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200" title="Programada para {{ (t.scheduled_at or '')[:16].replace('T', ' ') }}">
+          ⏰ Programada {{ (t.scheduled_at or '')[:16].replace('T', ' ') }}
+        </span>
+        {% endif %}
       </div>
       <div class="flex items-center gap-3 text-xs text-slate-500">
         <span>{{ t.kind }}</span>
