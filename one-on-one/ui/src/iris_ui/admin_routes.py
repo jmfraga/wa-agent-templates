@@ -454,13 +454,18 @@ def _task_sort_key(t: dict[str, Any]) -> tuple:
         return (0, sched, 0)
     # buckets normales: por updated_at desc (negamos via ordenamiento invertido del string)
     updated = t.get("updated_at") or ""
+    # Para desc dentro del bucket, prefijamos con "~" inverso: usamos tuple con neg via lexical inversion
     return (bucket, "", _inv_iso(updated))
 
 
 def _inv_iso(s: str) -> str:
     """Invierte un ISO timestamp para ordenamiento descendente en sort ascendente."""
+    # Truco: usar caracteres complemento. Como ISO timestamps son ASCII estable,
+    # invertimos restando de un char alto. Más simple: regresar el string como-is
+    # y dejar que el caller sepa que es ascending. Para desc, prefijamos con char alto.
     if not s:
         return "~"  # vacíos al final
+    # Construye un string invertido lexicográficamente
     return "".join(chr(0x7E - (ord(c) - 0x20)) if 0x20 <= ord(c) <= 0x7E else c for c in s)
 
 
@@ -506,7 +511,7 @@ async def admin_tasks(request: Request, status: str | None = None) -> HTMLRespon
     # Ordenamiento: pending scheduled futuras primero, luego buckets por prioridad.
     tasks.sort(key=_task_sort_key)
 
-    # Pre-calcular flag "is_scheduled_future" para el template.
+    # Pre-calcular flag "is_scheduled_future" para el template (evita lógica de tz en Jinja).
     now_iso = datetime.now(timezone.utc).isoformat()
     for t in tasks:
         sched = t.get("scheduled_at")
@@ -795,6 +800,47 @@ async def admin_cancel_task(request: Request, task_id: int) -> HTMLResponse:
         except httpx.HTTPError as e:
             return _HTML(f'<div class="p-3 text-rose-700">Error al cancelar: {e}</div>')
     return _HTML(f'<div class="p-3 text-emerald-700">✅ Task #{task_id} cancelada — <a href="/admin/tasks" class="underline">refrescar lista</a></div>')
+
+
+@router.post("/tasks/{task_id}/close", response_class=HTMLResponse)
+async def admin_close_task(request: Request, task_id: int) -> HTMLResponse:
+    """Marca la task como completa manualmente (atendida fuera de Iris)."""
+    import httpx
+    from fastapi.responses import HTMLResponse as _HTML
+    async with httpx.AsyncClient(timeout=10) as c:
+        try:
+            r = await c.post(f"{settings.BRAIN_URL}/tasks/{task_id}/close")
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            return _HTML(f'<div class="p-3 text-rose-700">Error al cerrar: {e}</div>')
+    return _HTML(f'<div class="p-3 text-emerald-700">✅ Task #{task_id} cerrada (marcada como completa) — <a href="/admin/tasks" class="underline">refrescar lista</a></div>')
+
+
+@router.post("/tasks/{task_id}/targets/{target_id}/cancel", response_class=HTMLResponse)
+async def admin_cancel_task_target(request: Request, task_id: int, target_id: int) -> HTMLResponse:
+    """Cancela un solo destinatario de la task. Los demás siguen activos."""
+    import httpx
+    from fastapi.responses import HTMLResponse as _HTML
+    async with httpx.AsyncClient(timeout=10) as c:
+        try:
+            r = await c.post(f"{settings.BRAIN_URL}/tasks/{task_id}/targets/{target_id}/cancel")
+            r.raise_for_status()
+            data = r.json()
+        except httpx.HTTPError as e:
+            detail = str(e)
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    detail = e.response.json().get("detail", detail)
+                except Exception:
+                    pass
+            return _HTML(f'<div class="p-3 text-rose-700">No se pudo cancelar este destinatario: {detail}</div>')
+    remaining = data.get("remaining_active", 0)
+    msg = f"✅ Destinatario cancelado"
+    if remaining == 0:
+        msg += " — no quedan activos, task marcada como completa."
+    else:
+        msg += f" — quedan {remaining} activo(s)."
+    return _HTML(f'<div class="p-3 text-emerald-700">{msg} <a href="/admin/tasks" class="underline">refrescar</a></div>')
 
 
 # --- Media (Phase 1c) ----------------------------------------------------
