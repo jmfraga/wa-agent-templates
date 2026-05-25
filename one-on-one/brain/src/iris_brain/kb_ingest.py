@@ -17,12 +17,14 @@ from sqlalchemy import select
 
 from .config import settings
 from .db import get_session
-from .models import KbFact, KbFactSource
+from .models import KbFact, KbFactSource, KbIngestLog
 
 log = logging.getLogger("iris_brain.kb_ingest")
 
 WHITELIST_DOMAINS: set[str] = {
     "info.example.com",
+    "info.example.com",
+    "blog.example.com",
     "blog.example.com",
     "marketing.example.com",
 }
@@ -130,8 +132,19 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _extract_with_haiku(url: str, text: str) -> dict[str, str]:
-    """Llama Haiku, devuelve dict[str,str]. Lanza KbIngestError si JSON inválido."""
+# Tarifas estimadas Haiku 4.5 (USD por token). TODO verificar precio oficial vigente.
+_HAIKU_INPUT_USD_PER_TOKEN = 1.0e-6
+_HAIKU_OUTPUT_USD_PER_TOKEN = 5.0e-6
+
+
+def _extract_with_haiku(
+    url: str, text: str, _usage_sink: dict[str, Any] | None = None
+) -> dict[str, str]:
+    """Llama Haiku, devuelve dict[str,str]. Lanza KbIngestError si JSON inválido.
+
+    Si `_usage_sink` se pasa (dict mutable), se rellena con tokens_input,
+    tokens_output y cost_usd_estimate para el caller (audit log).
+    """
     user_msg = (
         f"URL: {url}\n\nTexto:\n{text}\n\n"
         "Extrae como JSON con estas keys (omite las que no encuentres): "
@@ -149,6 +162,17 @@ def _extract_with_haiku(url: str, text: str) -> dict[str, str]:
         )
     except anthropic.APIError as e:
         raise KbIngestError("anthropic_error", f"Anthropic API error: {e}")
+    if _usage_sink is not None:
+        try:
+            ti = int(getattr(resp.usage, "input_tokens", 0) or 0)
+            to_ = int(getattr(resp.usage, "output_tokens", 0) or 0)
+        except Exception:  # noqa: BLE001
+            ti, to_ = 0, 0
+        _usage_sink["tokens_input"] = ti
+        _usage_sink["tokens_output"] = to_
+        _usage_sink["cost_usd_estimate"] = round(
+            ti * _HAIKU_INPUT_USD_PER_TOKEN + to_ * _HAIKU_OUTPUT_USD_PER_TOKEN, 6
+        )
     raw = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
     # Intento 1: JSON directo (camino feliz cuando Haiku obedece)
     data: Any
@@ -203,18 +227,65 @@ def _existing_facts_for_slug(slug: str) -> dict[str, str]:
         return {r.key: r.value for r in rows}
 
 
+def _log_ingest(
+    *,
+    url: str,
+    slug: str | None,
+    dry_run: bool,
+    facts_count: int | None = None,
+    usage: dict[str, Any] | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    triggered_by: str = "admin_ui",
+) -> None:
+    """Persiste una row en kb_ingest_log. Swallow errors (no debe romper ingest)."""
+    try:
+        with get_session() as s:
+            row = KbIngestLog(
+                url=url,
+                slug=slug,
+                dry_run=dry_run,
+                facts_count=facts_count,
+                tokens_input=(usage or {}).get("tokens_input"),
+                tokens_output=(usage or {}).get("tokens_output"),
+                cost_usd_estimate=(usage or {}).get("cost_usd_estimate"),
+                error_code=error_code,
+                error_message=error_message,
+                triggered_by=triggered_by,
+            )
+            s.add(row)
+    except Exception as e:  # noqa: BLE001
+        log.warning("kb_ingest_log write failed: %s", e)
+
+
 def ingest_url(url: str, slug: str | None = None, dry_run: bool = False) -> dict[str, Any]:
-    """Pipeline completo. Devuelve dict serializable."""
+    """Pipeline completo. Devuelve dict serializable. Persiste audit log."""
     if not is_whitelisted(url):
+        _log_ingest(
+            url=url, slug=slug, dry_run=dry_run,
+            error_code="not_whitelisted", error_message=f"Dominio no permitido: {url}",
+        )
         raise KbIngestError("not_whitelisted", f"Dominio no permitido: {url}")
     final_slug = (slug or "").strip() or derive_slug(url)
+    usage: dict[str, Any] = {}
 
-    html = _scrape_html(url)
-    text = _html_to_text(html)
-    if not text:
-        raise KbIngestError("empty_text", "no se extrajo texto del HTML")
-    facts = _extract_with_haiku(url, text)
+    try:
+        html = _scrape_html(url)
+        text = _html_to_text(html)
+        if not text:
+            raise KbIngestError("empty_text", "no se extrajo texto del HTML")
+        facts = _extract_with_haiku(url, text, _usage_sink=usage)
+    except KbIngestError as e:
+        _log_ingest(
+            url=url, slug=final_slug, dry_run=dry_run, usage=usage,
+            error_code=e.code, error_message=str(e),
+        )
+        raise
     if not facts:
+        _log_ingest(
+            url=url, slug=final_slug, dry_run=dry_run, usage=usage,
+            error_code="no_facts", error_message="Haiku no extrajo facts",
+        )
         raise KbIngestError("no_facts", "Haiku no extrajo ningún fact reconocible")
 
     # comparar con existentes para marcar overrides
@@ -225,6 +296,10 @@ def ingest_url(url: str, slug: str | None = None, dry_run: bool = False) -> dict
         diff[k] = {"new": v, "old": old, "changed": (old is not None and old != v)}
 
     if dry_run:
+        _log_ingest(
+            url=url, slug=final_slug, dry_run=True, usage=usage,
+            facts_count=len(facts),
+        )
         return {
             "ok": True,
             "dry_run": True,
@@ -258,6 +333,10 @@ def ingest_url(url: str, slug: str | None = None, dry_run: bool = False) -> dict
                 cf.version = cf.version + 1
             s.flush()
             upserted_ids.append(cf.id)
+    _log_ingest(
+        url=url, slug=final_slug, dry_run=False, usage=usage,
+        facts_count=len(facts),
+    )
     return {
         "ok": True,
         "dry_run": False,

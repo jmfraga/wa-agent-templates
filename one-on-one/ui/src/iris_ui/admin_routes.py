@@ -1030,3 +1030,20 @@ async def admin_health_probe(request: Request, name: str) -> HTMLResponse:
         "admin/_partials/health_table.html",
         {"request": request, "components": data.get("components", [])},
     )
+
+
+@router.get("/kb-ingest-log", response_class=HTMLResponse)
+async def admin_kb_ingest_log(request: Request, limit: int = 50) -> HTMLResponse:
+    """Audit log de ingest desde URL: últimas N entries."""
+    data = await brain_client.admin_kb_ingest_log(limit=limit)
+    return _render(
+        request,
+        "admin/kb_ingest_log.html",
+        {
+            "active": "kb_ingest_log",
+            "entries": data.get("entries", []),
+            "brain_offline": data.get("brain_offline", False),
+            "admin_unauthorized": data.get("admin_unauthorized", False),
+            "limit": limit,
+        },
+    )

@@ -12,6 +12,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     func,
@@ -250,3 +251,30 @@ class TaskTarget(Base):
     response_classification: Mapped[str | None] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(32), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class KbIngestLog(Base):
+    """Audit log de /admin/kb-facts/ingest-url.
+
+    Una row por cada llamada al endpoint (incluyendo dry_run y errores).
+    Permite ver costo acumulado de Haiku y diagnosticar fallas.
+    """
+    __tablename__ = "kb_ingest_log"
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    url: Mapped[str] = mapped_column(Text)
+    slug: Mapped[str | None] = mapped_column(String(64))
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=False)
+    facts_count: Mapped[int | None] = mapped_column(Integer)
+    tokens_input: Mapped[int | None] = mapped_column(Integer)
+    tokens_output: Mapped[int | None] = mapped_column(Integer)
+    cost_usd_estimate: Mapped[float | None] = mapped_column(Numeric(10, 6))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    triggered_by: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
