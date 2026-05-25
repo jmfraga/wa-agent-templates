@@ -7,6 +7,20 @@
     <p class="text-sm text-slate-500">Datos por curso que Iris consulta cuando le preguntan. Agrupado por slug.</p>
   </header>
 
+  <style>
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline-flex; }
+    .htmx-request.htmx-indicator { display: inline-flex; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid currentColor; border-right-color: transparent;
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+      vertical-align: -3px; margin-right: 6px;
+    }
+    form.htmx-request fieldset { opacity: 0.5; pointer-events: none; }
+  </style>
+
   {# Form para agregar un fact nuevo #}
   <details class="bg-white border border-slate-200 rounded-lg shadow-sm">
     <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50">
@@ -37,6 +51,55 @@
         Guardar
       </button>
     </form>
+  </details>
+
+  {# Bulk ingest desde URL #}
+  <details class="bg-white border border-emerald-200 rounded-lg shadow-sm">
+    <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-emerald-800 hover:bg-emerald-50">
+      🔗 Ingest masivo desde URL
+    </summary>
+    <form
+      class="p-4 border-t border-emerald-200 space-y-3"
+      hx-post="/courses/ingest-url"
+      hx-target="#ingest-preview-container"
+      hx-swap="innerHTML"
+      hx-disabled-elt="find button"
+      hx-indicator="this"
+    >
+      <fieldset class="space-y-3 border-0 p-0 m-0">
+      <div class="flex flex-col">
+        <label class="text-xs text-slate-500 mb-1">URL de la landing</label>
+        <input type="url" name="url" required
+               placeholder="https://info.simacademy.lat/has-magia-con-claude/"
+               class="border border-slate-300 rounded-md px-3 py-2 text-sm font-mono" />
+      </div>
+      <div class="flex flex-col">
+        <label class="text-xs text-slate-500 mb-1">Slug override (opcional — si no, se deriva del URL)</label>
+        <input type="text" name="slug" list="known-slugs-ingest"
+               placeholder="has-magia-con-claude"
+               class="border border-slate-300 rounded-md px-3 py-2 text-sm" />
+        <datalist id="known-slugs-ingest">
+          {% for slug in groups.keys() %}<option value="{{ slug }}">{% endfor %}
+        </datalist>
+      </div>
+      <label class="flex items-center gap-2 text-sm text-slate-700">
+        <input type="checkbox" name="dry_run" value="on" checked class="w-4 h-4" />
+        Solo previsualizar antes de guardar (recomendado)
+      </label>
+      <div class="flex items-center gap-2">
+        <button type="submit"
+                class="bg-emerald-700 text-white text-sm rounded-md px-4 py-1.5 hover:bg-emerald-800 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center">
+          <span class="htmx-indicator spinner"></span>
+          <span class="htmx-indicator">Procesando con Haiku…</span>
+          <span class="[.htmx-request_&]:hidden">Procesar URL</span>
+        </button>
+        <span class="text-xs text-slate-500">
+          Dominios permitidos: info/blog/marketing de simacademy.lat y emergencias.com.mx
+        </span>
+      </div>
+      </fieldset>
+    </form>
+    <div id="ingest-preview-container" class="px-4 pb-4"></div>
   </details>
 
   {# Lista agrupada por curso #}

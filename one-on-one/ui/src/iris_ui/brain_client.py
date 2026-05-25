@@ -128,7 +128,7 @@ class BrainClient:
         return await self._get("/contacts", params=params)
 
     async def get_contact(self, phone: str) -> dict[str, Any]:
-        # TODO(OWNER): confirm exact brain route shape; assuming /contacts/{phone}.
+        # TODO(JMF): confirm exact brain route shape; assuming /contacts/{phone}.
         return await self._get(f"/contacts/{phone}")
 
     async def list_tickets(self, status: str | None = None) -> dict[str, Any]:
@@ -147,7 +147,26 @@ class BrainClient:
     async def upsert_kb_fact(self, slug: str, key: str, value: str) -> dict[str, Any]:
         return await self._post(
             "/kb-facts",
-            {"slug": slug, "key": key, "value": value},
+            {"kb_slug": slug, "key": key, "value": value},
+        )
+
+    async def admin_kb_ingest_url(
+        self, url: str, slug: str | None = None, dry_run: bool = True
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"url": url, "dry_run": dry_run}
+        if slug:
+            payload["slug"] = slug
+        return await self._post(
+            "/admin/kb-facts/ingest-url", payload, admin=True
+        )
+
+    async def admin_kb_ingest_selected(
+        self, slug: str, facts: dict[str, str]
+    ) -> dict[str, Any]:
+        return await self._post(
+            "/admin/kb-facts/ingest-selected",
+            {"slug": slug, "facts": facts},
+            admin=True,
         )
 
     async def get_health(self) -> dict[str, Any]:

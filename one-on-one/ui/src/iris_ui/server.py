@@ -25,7 +25,7 @@ TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
 # The package ships its own templates dir but we also want a project-level
-# /static at /Users/owner/Projects/iris/ui/static for assets that don't
+# /static at /Users/jmfraga/Projects/iris/ui/static for assets that don't
 # live inside the package.
 PROJECT_STATIC_DIR = BASE_DIR.parent.parent.parent / "static"
 
@@ -227,6 +227,122 @@ async def upsert_kb(
             "facts": data.get("items", []),
             "groups": _group_facts(data.get("items", [])),
             "brain_offline": data.get("brain_offline", False),
+        },
+        partial="_partials/courses_list.html",
+    )
+
+
+@app.post("/courses/ingest-url", response_class=HTMLResponse)
+async def courses_ingest_url(
+    request: Request,
+    url: str = Form(...),
+    slug: str = Form(""),
+    dry_run: str = Form(""),
+) -> HTMLResponse:
+    """Preview o ingesta directa según checkbox dry_run."""
+    is_dry = bool(dry_run)
+    res = await brain_client.admin_kb_ingest_url(
+        url=url, slug=slug or None, dry_run=is_dry
+    )
+    # Errores estandarizados
+    if res.get("brain_offline"):
+        return HTMLResponse(
+            '<div class="p-3 text-rose-700 text-sm">✗ Brain no responde</div>'
+        )
+    if res.get("admin_unauthorized"):
+        return HTMLResponse(
+            '<div class="p-3 text-rose-700 text-sm">✗ Admin token inválido</div>'
+        )
+    if not res.get("ok"):
+        err_body = res.get("error") or res.get("detail") or res
+        if isinstance(err_body, dict):
+            code = err_body.get("code", "")
+            detail = err_body.get("detail", str(err_body))
+        else:
+            code = ""
+            detail = str(err_body)
+        icon = {
+            "not_whitelisted": "❌ Dominio no permitido",
+            "timeout": "⏱ Timeout al scraping",
+            "bad_json": "🤖 Claude no devolvió JSON válido",
+            "bad_content_type": "❌ Content-Type no HTML",
+            "too_large": "❌ HTML demasiado grande (>1MB)",
+            "no_facts": "⚠️ No se detectaron facts en la landing",
+            "empty_text": "⚠️ Texto vacío",
+            "missing_dep": "❌ Falta dependencia beautifulsoup4 en el brain",
+        }.get(code, f"✗ Error ({code or 'desconocido'})")
+        return HTMLResponse(
+            f'<div class="p-3 text-rose-700 text-sm">{icon}: '
+            f'<code class="text-xs">{detail}</code></div>'
+        )
+    if is_dry:
+        # render preview con checkboxes
+        return _render(
+            request,
+            "_partials/courses_ingest_preview.html",
+            {
+                "preview": res,
+                "slug": res.get("slug"),
+                "url": url,
+                "facts": res.get("facts", {}),
+                "diff": res.get("diff", {}),
+            },
+            partial="_partials/courses_ingest_preview.html",
+        )
+    # Sin dry_run → upsert ya hecho. Refrescar lista.
+    data = await brain_client.list_kb_facts()
+    return _render(
+        request,
+        "_partials/courses_list.html",
+        {
+            "facts": data.get("items", []),
+            "groups": _group_facts(data.get("items", [])),
+            "brain_offline": data.get("brain_offline", False),
+            "ingest_summary": (
+                f'✓ Ingestados {res.get("facts_count")} facts en '
+                f'<code>{res.get("slug")}</code>'
+            ),
+        },
+        partial="_partials/courses_list.html",
+    )
+
+
+@app.post("/courses/ingest-url-confirm", response_class=HTMLResponse)
+async def courses_ingest_url_confirm(request: Request) -> HTMLResponse:
+    """Recibe form con slug + fact_<key> seleccionados, upsert y refresca lista."""
+    form = await request.form()
+    slug = (form.get("slug") or "").strip()
+    if not slug:
+        return HTMLResponse(
+            '<div class="p-3 text-rose-700 text-sm">✗ Slug requerido</div>'
+        )
+    facts: dict[str, str] = {}
+    for k, v in form.multi_items():
+        if k.startswith("fact_") and v:
+            key = k[len("fact_"):]
+            facts[key] = str(v)
+    if not facts:
+        return HTMLResponse(
+            '<div class="p-3 text-amber-700 text-sm">⚠️ No seleccionaste ningún fact</div>'
+        )
+    res = await brain_client.admin_kb_ingest_selected(slug=slug, facts=facts)
+    if not res.get("ok"):
+        return HTMLResponse(
+            f'<div class="p-3 text-rose-700 text-sm">✗ Error al guardar: '
+            f'<code>{res.get("error") or res.get("detail") or res}</code></div>'
+        )
+    data = await brain_client.list_kb_facts()
+    return _render(
+        request,
+        "_partials/courses_list.html",
+        {
+            "facts": data.get("items", []),
+            "groups": _group_facts(data.get("items", [])),
+            "brain_offline": data.get("brain_offline", False),
+            "ingest_summary": (
+                f'✓ Confirmados {res.get("facts_count")} facts en '
+                f'<code>{slug}</code>'
+            ),
         },
         partial="_partials/courses_list.html",
     )
