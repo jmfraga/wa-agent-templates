@@ -40,59 +40,6 @@
   </details>
 
   {# Lista agrupada por curso #}
-  <div id="courses-list" class="space-y-4">
-    {% if not groups %}
-    <div class="bg-white border border-slate-200 rounded-lg shadow-sm p-8 text-center text-slate-400 text-sm">
-      Sin course facts todavía. Agrega el primero arriba.
-    </div>
-    {% endif %}
-
-    {% for slug, facts_in_slug in groups.items() %}
-    <details {% if loop.first %}open{% endif %} class="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
-      <summary class="cursor-pointer px-4 py-3 bg-slate-50 hover:bg-slate-100 flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <span class="font-mono text-sm font-semibold text-slate-900">{{ slug }}</span>
-          {% set nombre = facts_in_slug | selectattr('key', 'equalto', 'nombre') | map(attribute='value') | first %}
-          {% if nombre %}
-          <span class="text-sm text-slate-600">— {{ nombre }}</span>
-          {% endif %}
-        </div>
-        <span class="text-xs text-slate-500">{{ facts_in_slug | length }} fact{{ 's' if facts_in_slug | length != 1 else '' }}</span>
-      </summary>
-      <table class="min-w-full text-sm">
-        <thead class="bg-slate-50 text-slate-500 text-xs border-t border-slate-200">
-          <tr>
-            <th class="text-left px-4 py-2 font-medium w-40">Key</th>
-            <th class="text-left px-4 py-2 font-medium">Value</th>
-            <th class="text-left px-4 py-2 font-medium w-20">Fuente</th>
-            <th class="text-left px-4 py-2 font-medium w-32">Actualizado</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-100">
-          {% for f in facts_in_slug %}
-          <tr>
-            <td class="px-4 py-2 font-mono text-slate-700">{{ f.key }}</td>
-            <td class="px-4 py-2">
-              <form hx-post="/courses" hx-target="#courses-list" hx-swap="outerHTML" class="flex gap-2 items-center">
-                <input type="hidden" name="slug" value="{{ f.slug }}" />
-                <input type="hidden" name="key" value="{{ f.key }}" />
-                <input name="value" value="{{ f.value }}" class="border border-slate-200 rounded-md px-2 py-1 text-sm w-full" />
-                <button class="text-xs text-slate-500 hover:text-slate-900">💾</button>
-              </form>
-            </td>
-            <td class="px-4 py-2 text-xs">
-              <span class="inline-block px-2 py-0.5 rounded-full text-xs
-                {% if f.source == 'owner' %}bg-amber-50 text-amber-700{% elif f.source == 'landing' %}bg-emerald-50 text-emerald-700{% else %}bg-slate-100 text-slate-600{% endif %}">
-                {{ f.source }}
-              </span>
-            </td>
-            <td class="px-4 py-2 text-slate-500 text-xs">{{ (f.updated_at or '')[:10] }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </details>
-    {% endfor %}
-  </div>
+  {% include "_partials/courses_list.html" %}
 </section>
 {% endblock %}

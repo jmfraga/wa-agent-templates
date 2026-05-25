@@ -228,6 +228,7 @@ async def upsert_kb(
             "groups": _group_facts(data.get("items", [])),
             "brain_offline": data.get("brain_offline", False),
         },
+        partial="_partials/courses_list.html",
     )
 
 
