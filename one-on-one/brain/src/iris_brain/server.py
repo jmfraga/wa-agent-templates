@@ -208,7 +208,7 @@ class TaskPreviewRequest(BaseModel):
 def preview_task(req: TaskPreviewRequest) -> dict[str, Any]:
     """Crea task agéntica en 'pending' y devuelve preview personalizado por target.
 
-    NO envía. UI/Telegram presentan preview a Owner; tras confirmar → POST /tasks/{id}/send-all.
+    NO envía. UI/Telegram presentan preview a JMF; tras confirmar → POST /tasks/{id}/send-all.
     """
     from . import agentic
     from .models import ContactKind
@@ -415,7 +415,7 @@ def cancel_task(task_id: int) -> dict[str, Any]:
 @app.post("/tasks/{task_id}/close")
 def close_task(task_id: int) -> dict[str, Any]:
     """Marca task como completa (manualmente). Cancela los targets que sigan en 'pending'
-    pero deja los 'sent' y 'responded' intactos. Usar cuando Owner terminó de atender la task
+    pero deja los 'sent' y 'responded' intactos. Usar cuando JMF terminó de atender la task
     fuera de Iris y solo quiere quitarla del board."""
     from .models import Task, TaskTarget
     from sqlalchemy import update as sa_update
@@ -467,10 +467,10 @@ class OwnerInstructRequest(BaseModel):
 
 @app.post("/owner/instruct")
 def owner_instruct(req: OwnerInstructRequest) -> dict[str, Any]:
-    """Owner dicta una instrucción agéntica desde Telegram. Iris la procesa con tools agentic."""
+    """JMF dicta una instrucción agéntica desde Telegram. Iris la procesa con tools agentic."""
     from .models import ContactKind
 
-    # Resolver el owner (Owner). Si no se pasa owner_phone, buscamos el primer contacto kind=owner.
+    # Resolver el owner (JMF). Si no se pasa owner_phone, buscamos el primer contacto kind=owner.
     with get_session() as s:
         if req.owner_phone:
             p = sessions.sanitize_phone(req.owner_phone)
@@ -496,7 +496,7 @@ def owner_instruct(req: OwnerInstructRequest) -> dict[str, Any]:
 
 @app.post("/jmf/reply")
 def jmf_reply(req: JMFReplyRequest) -> dict[str, Any]:
-    """Owner responde a un ticket; mandamos la respuesta al contacto vía relay."""
+    """JMF responde a un ticket; mandamos la respuesta al contacto vía relay."""
     with get_session() as s:
         t = s.get(Ticket, req.ticket_id)
         if t is None:
@@ -1002,6 +1002,53 @@ def list_kb_facts(kb_slug: str | None = None) -> dict[str, Any]:
         }
 
 
+class KbIngestUrlRequest(BaseModel):
+    url: str
+    slug: str | None = None
+    dry_run: bool = False
+
+
+class KbIngestSelectedRequest(BaseModel):
+    slug: str
+    facts: dict[str, str]
+
+
+@app.post("/admin/kb-facts/ingest-url", dependencies=[Depends(require_admin)])
+def admin_kb_ingest_url(req: KbIngestUrlRequest) -> dict[str, Any]:
+    """Scrape landing → Haiku extrae facts → preview o upsert."""
+    from . import kb_ingest
+
+    try:
+        return kb_ingest.ingest_url(req.url, slug=req.slug, dry_run=req.dry_run)
+    except kb_ingest.KbIngestError as e:
+        code_to_status = {
+            "not_whitelisted": 403,
+            "timeout": 504,
+            "http_error": 502,
+            "http_status": 502,
+            "bad_content_type": 415,
+            "too_large": 413,
+            "empty_text": 422,
+            "no_facts": 422,
+            "bad_json": 422,
+            "anthropic_error": 502,
+            "missing_dep": 500,
+            "bad_slug": 400,
+        }
+        raise HTTPException(code_to_status.get(e.code, 500), {"code": e.code, "detail": str(e)})
+
+
+@app.post("/admin/kb-facts/ingest-selected", dependencies=[Depends(require_admin)])
+def admin_kb_ingest_selected(req: KbIngestSelectedRequest) -> dict[str, Any]:
+    """Upsert manual del subset de facts seleccionados por el usuario."""
+    from . import kb_ingest
+
+    try:
+        return kb_ingest.upsert_selected(req.slug, req.facts)
+    except kb_ingest.KbIngestError as e:
+        raise HTTPException(400, {"code": e.code, "detail": str(e)})
+
+
 @app.post("/reset")
 def reset_endpoint(req: ResetRequest) -> dict[str, Any]:
     """Cierra threads abiertos. Si phone se da, solo de ese contacto; si no, todos."""
@@ -1290,8 +1337,8 @@ class ForwardAnswerRequest(BaseModel):
 
 @app.post("/owner/forward-answer")
 def owner_forward_answer(req: ForwardAnswerRequest) -> dict[str, Any]:
-    """Reenvía la respuesta del owner (Owner) a un contacto. Llamado desde relay-bot
-    cuando Owner aprieta los botones rápidos del menú usr:* o escribe en pending_reply."""
+    """Reenvía la respuesta del owner (JMF) a un contacto. Llamado desde relay-bot
+    cuando JMF aprieta los botones rápidos del menú usr:* o escribe en pending_reply."""
     from . import agentic
     r = agentic.forward_owner_answer(
         contact_phone=req.contact_phone,
