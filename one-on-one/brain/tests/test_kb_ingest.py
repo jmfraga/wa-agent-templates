@@ -1,11 +1,15 @@
-"""Tests para kb_ingest: whitelist, slug derive, parser Haiku, dry_run."""
+"""Tests para kb_ingest: whitelist, slug derive, parser Haiku, dry_run,
+audit log y rate-limit del endpoint /admin/kb-facts/ingest-url."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy import select
 
 from iris_brain import kb_ingest
+from iris_brain.db import get_session
+from iris_brain.models import KbIngestLog
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +137,7 @@ def test_ingest_url_dry_run_no_escribe(monkeypatch):
     monkeypatch.setattr(
         kb_ingest,
         "_extract_with_haiku",
-        lambda url, text: {"nombre": "X", "precio": "$100"},
+        lambda url, text, _usage_sink=None: {"nombre": "X", "precio": "$100"},
     )
     r = kb_ingest.ingest_url(
         "https://info.example.com/x/", slug="x-slug", dry_run=True
@@ -144,3 +148,83 @@ def test_ingest_url_dry_run_no_escribe(monkeypatch):
     assert r["facts"] == {"nombre": "X", "precio": "$100"}
     assert r["would_upsert"] == 2
     assert "diff" in r
+
+
+# ---------------------------------------------------------------------------
+# Audit log — _log_ingest persiste row con cost_estimate y se ve en DB
+# ---------------------------------------------------------------------------
+
+
+def test_audit_log_persiste_con_cost_estimate(monkeypatch):
+    """Una corrida dry_run exitosa deja una row en kb_ingest_log con
+    facts_count, tokens y cost_usd_estimate > 0."""
+    monkeypatch.setattr(
+        kb_ingest, "_scrape_html", lambda url: "<html><body><main>x</main></body></html>"
+    )
+    monkeypatch.setattr(kb_ingest, "_html_to_text", lambda html: "texto plano fixture")
+
+    # _extract_with_haiku acepta _usage_sink — simulamos que lo rellena.
+    def _fake_extract(url, text, _usage_sink=None):
+        if _usage_sink is not None:
+            _usage_sink["tokens_input"] = 1234
+            _usage_sink["tokens_output"] = 56
+            _usage_sink["cost_usd_estimate"] = 0.001514
+        return {"nombre": "X"}
+
+    monkeypatch.setattr(kb_ingest, "_extract_with_haiku", _fake_extract)
+
+    kb_ingest.ingest_url(
+        "https://info.example.com/x/", slug="x-slug", dry_run=True
+    )
+
+    with get_session() as s:
+        rows = list(
+            s.scalars(select(KbIngestLog).order_by(KbIngestLog.id.desc()).limit(1))
+        )
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.slug == "x-slug"
+        assert row.dry_run is True
+        assert row.facts_count == 1
+        assert row.tokens_input == 1234
+        assert row.tokens_output == 56
+        assert row.error_code is None
+        assert float(row.cost_usd_estimate) > 0
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit — 6ta llamada en <60s devuelve 429
+# ---------------------------------------------------------------------------
+
+
+def test_rate_limit_dispara_429_tras_5_calls_en_un_minuto(
+    monkeypatch, client
+):
+    """El 6to POST a /admin/kb-facts/ingest-url debe devolver 429."""
+    from iris_brain import server as server_mod
+
+    # Aislar el deque del rate-limit (compartido global) entre tests.
+    server_mod._ingest_call_times.clear()
+
+    # Mockear ingest_url para que NO golpee Anthropic ni la red.
+    monkeypatch.setattr(
+        kb_ingest, "ingest_url",
+        lambda url, slug=None, dry_run=False: {
+            "ok": True, "dry_run": dry_run, "slug": "x", "url": url,
+            "facts": {"nombre": "X"}, "diff": {}, "would_upsert": 1, "text_chars": 0,
+        },
+    )
+
+    # Bypass admin auth en test vía dependency_overrides
+    server_mod.app.dependency_overrides[server_mod.require_admin] = lambda: None
+    try:
+        payload = {"url": "https://info.example.com/x/", "dry_run": True}
+        statuses = []
+        for _ in range(6):
+            r = client.post("/admin/kb-facts/ingest-url", json=payload)
+            statuses.append(r.status_code)
+        assert statuses[:5].count(200) == 5, f"primeras 5 != 200: {statuses}"
+        assert statuses[5] == 429, f"6ta != 429: {statuses}"
+    finally:
+        server_mod._ingest_call_times.clear()
+        server_mod.app.dependency_overrides.pop(server_mod.require_admin, None)

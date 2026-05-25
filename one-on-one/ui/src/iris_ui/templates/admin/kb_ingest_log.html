@@ -1,0 +1,79 @@
+{% extends "admin/_layout.html" %}
+{% block admin_title %}KB Ingest Log{% endblock %}
+{% block admin_content %}
+<section class="space-y-6 max-w-6xl">
+  <header>
+    <h1 class="text-xl font-semibold text-slate-900">📜 KB Ingest Log</h1>
+    <p class="text-sm text-slate-500">
+      Auditoría de cada llamada a <code>/admin/kb-facts/ingest-url</code>:
+      URL, slug, dry_run, facts extraídos, tokens, costo estimado Haiku 4.5,
+      errores. Últimas {{ limit }} entries.
+    </p>
+  </header>
+
+  {% if admin_unauthorized %}
+  <div class="bg-rose-50 border border-rose-200 rounded-lg p-4 text-rose-900">
+    Token de admin inválido. Revisa <code>IRIS_ADMIN_TOKEN</code>.
+  </div>
+  {% elif brain_offline %}
+  <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 text-amber-900">
+    Brain no responde — la lista podría estar desactualizada.
+  </div>
+  {% endif %}
+
+  <div class="overflow-x-auto bg-white border border-slate-200 rounded-lg">
+    <table class="min-w-full text-sm">
+      <thead class="bg-slate-50 text-slate-600 text-xs uppercase">
+        <tr>
+          <th class="px-3 py-2 text-left">Cuándo</th>
+          <th class="px-3 py-2 text-left">URL</th>
+          <th class="px-3 py-2 text-left">Slug</th>
+          <th class="px-3 py-2 text-center">Modo</th>
+          <th class="px-3 py-2 text-right">Facts</th>
+          <th class="px-3 py-2 text-right">Tokens in/out</th>
+          <th class="px-3 py-2 text-right">Costo USD</th>
+          <th class="px-3 py-2 text-left">Error</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {% for e in entries %}
+        <tr class="{% if e.error_code %}bg-rose-50{% endif %}">
+          <td class="px-3 py-2 whitespace-nowrap text-slate-700">{{ e.created_at }}</td>
+          <td class="px-3 py-2 max-w-xs truncate" title="{{ e.url }}">
+            <a href="{{ e.url }}" target="_blank" rel="noopener" class="text-emerald-700 hover:underline">{{ e.url }}</a>
+          </td>
+          <td class="px-3 py-2 font-mono text-xs">{{ e.slug or '—' }}</td>
+          <td class="px-3 py-2 text-center">
+            {% if e.dry_run %}
+              <span class="inline-block px-2 py-0.5 rounded bg-slate-200 text-slate-700 text-xs">dry-run</span>
+            {% else %}
+              <span class="inline-block px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs">upsert</span>
+            {% endif %}
+          </td>
+          <td class="px-3 py-2 text-right">{{ e.facts_count if e.facts_count is not none else '—' }}</td>
+          <td class="px-3 py-2 text-right text-xs text-slate-600">
+            {% if e.tokens_input is not none %}{{ e.tokens_input }}/{{ e.tokens_output }}{% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-2 text-right text-xs">
+            {% if e.cost_usd_estimate is not none %}${{ "%.6f"|format(e.cost_usd_estimate) }}{% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-2 text-xs text-rose-700">
+            {% if e.error_code %}
+              <span class="font-mono">{{ e.error_code }}</span>
+              {% if e.error_message %}<div class="text-slate-500 mt-0.5 truncate max-w-xs" title="{{ e.error_message }}">{{ e.error_message }}</div>{% endif %}
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="px-3 py-6 text-center text-slate-400">Sin entries todavía.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <p class="text-xs text-slate-400">
+    Rate-limit activo: máx 5 ingests/min (combinado entre <code>ingest-url</code> y <code>ingest-selected</code>).
+    Tarifas Haiku 4.5 usadas para estimar costo: $1/MTok input, $5/MTok output (TODO verificar precio oficial).
+  </p>
+</section>
+{% endblock %}

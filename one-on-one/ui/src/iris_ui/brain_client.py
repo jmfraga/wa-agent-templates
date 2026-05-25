@@ -128,7 +128,7 @@ class BrainClient:
         return await self._get("/contacts", params=params)
 
     async def get_contact(self, phone: str) -> dict[str, Any]:
-        # TODO(JMF): confirm exact brain route shape; assuming /contacts/{phone}.
+        # TODO(Owner): confirm exact brain route shape; assuming /contacts/{phone}.
         return await self._get(f"/contacts/{phone}")
 
     async def list_tickets(self, status: str | None = None) -> dict[str, Any]:
@@ -167,6 +167,11 @@ class BrainClient:
             "/admin/kb-facts/ingest-selected",
             {"slug": slug, "facts": facts},
             admin=True,
+        )
+
+    async def admin_kb_ingest_log(self, limit: int = 50) -> dict[str, Any]:
+        return await self._get(
+            "/admin/kb-facts/log", params={"limit": limit}, admin=True
         )
 
     async def get_health(self) -> dict[str, Any]:

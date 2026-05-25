@@ -19,6 +19,7 @@ from .models import (
     Contact,
     KbFact,
     KbFactSource,
+    KbIngestLog,
     Message,
     MessageDirection,
     Ticket,
@@ -208,7 +209,7 @@ class TaskPreviewRequest(BaseModel):
 def preview_task(req: TaskPreviewRequest) -> dict[str, Any]:
     """Crea task agéntica en 'pending' y devuelve preview personalizado por target.
 
-    NO envía. UI/Telegram presentan preview a JMF; tras confirmar → POST /tasks/{id}/send-all.
+    NO envía. UI/Telegram presentan preview a Owner; tras confirmar → POST /tasks/{id}/send-all.
     """
     from . import agentic
     from .models import ContactKind
@@ -415,7 +416,7 @@ def cancel_task(task_id: int) -> dict[str, Any]:
 @app.post("/tasks/{task_id}/close")
 def close_task(task_id: int) -> dict[str, Any]:
     """Marca task como completa (manualmente). Cancela los targets que sigan en 'pending'
-    pero deja los 'sent' y 'responded' intactos. Usar cuando JMF terminó de atender la task
+    pero deja los 'sent' y 'responded' intactos. Usar cuando Owner terminó de atender la task
     fuera de Iris y solo quiere quitarla del board."""
     from .models import Task, TaskTarget
     from sqlalchemy import update as sa_update
@@ -467,10 +468,10 @@ class OwnerInstructRequest(BaseModel):
 
 @app.post("/owner/instruct")
 def owner_instruct(req: OwnerInstructRequest) -> dict[str, Any]:
-    """JMF dicta una instrucción agéntica desde Telegram. Iris la procesa con tools agentic."""
+    """Owner dicta una instrucción agéntica desde Telegram. Iris la procesa con tools agentic."""
     from .models import ContactKind
 
-    # Resolver el owner (JMF). Si no se pasa owner_phone, buscamos el primer contacto kind=owner.
+    # Resolver el owner (Owner). Si no se pasa owner_phone, buscamos el primer contacto kind=owner.
     with get_session() as s:
         if req.owner_phone:
             p = sessions.sanitize_phone(req.owner_phone)
@@ -496,7 +497,7 @@ def owner_instruct(req: OwnerInstructRequest) -> dict[str, Any]:
 
 @app.post("/jmf/reply")
 def jmf_reply(req: JMFReplyRequest) -> dict[str, Any]:
-    """JMF responde a un ticket; mandamos la respuesta al contacto vía relay."""
+    """Owner responde a un ticket; mandamos la respuesta al contacto vía relay."""
     with get_session() as s:
         t = s.get(Ticket, req.ticket_id)
         if t is None:
@@ -1013,11 +1014,38 @@ class KbIngestSelectedRequest(BaseModel):
     facts: dict[str, str]
 
 
+# ---------------------------------------------------------------------------
+# Rate-limit in-process para /admin/kb-facts/ingest-url y /ingest-selected.
+# Single-tenant; ventana rolling 60s; máx 5 calls/min combinados.
+# ---------------------------------------------------------------------------
+from collections import deque as _ingest_deque  # noqa: E402
+from time import monotonic as _ingest_monotonic  # noqa: E402
+
+_INGEST_RATE_PER_MIN = 5
+_ingest_call_times: _ingest_deque[float] = _ingest_deque()
+
+
+def _check_ingest_rate_limit() -> None:
+    now = _ingest_monotonic()
+    while _ingest_call_times and now - _ingest_call_times[0] > 60.0:
+        _ingest_call_times.popleft()
+    if len(_ingest_call_times) >= _INGEST_RATE_PER_MIN:
+        raise HTTPException(
+            429,
+            {
+                "code": "rate_limited",
+                "detail": f"max {_INGEST_RATE_PER_MIN} ingests/min, intenta en unos segundos",
+            },
+        )
+    _ingest_call_times.append(now)
+
+
 @app.post("/admin/kb-facts/ingest-url", dependencies=[Depends(require_admin)])
 def admin_kb_ingest_url(req: KbIngestUrlRequest) -> dict[str, Any]:
     """Scrape landing → Haiku extrae facts → preview o upsert."""
     from . import kb_ingest
 
+    _check_ingest_rate_limit()
     try:
         return kb_ingest.ingest_url(req.url, slug=req.slug, dry_run=req.dry_run)
     except kb_ingest.KbIngestError as e:
@@ -1043,10 +1071,46 @@ def admin_kb_ingest_selected(req: KbIngestSelectedRequest) -> dict[str, Any]:
     """Upsert manual del subset de facts seleccionados por el usuario."""
     from . import kb_ingest
 
+    _check_ingest_rate_limit()
     try:
         return kb_ingest.upsert_selected(req.slug, req.facts)
     except kb_ingest.KbIngestError as e:
         raise HTTPException(400, {"code": e.code, "detail": str(e)})
+
+
+@app.get("/admin/kb-facts/log", dependencies=[Depends(require_admin)])
+def admin_kb_ingest_log(limit: int = 50) -> dict[str, Any]:
+    """Últimas N entries del audit log de ingest-url, más recientes primero."""
+    limit = max(1, min(int(limit or 50), 500))
+    with get_session() as s:
+        rows = list(
+            s.scalars(
+                select(KbIngestLog).order_by(KbIngestLog.created_at.desc()).limit(limit)
+            )
+        )
+        return {
+            "entries": [
+                {
+                    "id": r.id,
+                    "url": r.url,
+                    "slug": r.slug,
+                    "dry_run": r.dry_run,
+                    "facts_count": r.facts_count,
+                    "tokens_input": r.tokens_input,
+                    "tokens_output": r.tokens_output,
+                    "cost_usd_estimate": (
+                        float(r.cost_usd_estimate)
+                        if r.cost_usd_estimate is not None
+                        else None
+                    ),
+                    "error_code": r.error_code,
+                    "error_message": r.error_message,
+                    "triggered_by": r.triggered_by,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in rows
+            ]
+        }
 
 
 @app.post("/reset")
@@ -1337,8 +1401,8 @@ class ForwardAnswerRequest(BaseModel):
 
 @app.post("/owner/forward-answer")
 def owner_forward_answer(req: ForwardAnswerRequest) -> dict[str, Any]:
-    """Reenvía la respuesta del owner (JMF) a un contacto. Llamado desde relay-bot
-    cuando JMF aprieta los botones rápidos del menú usr:* o escribe en pending_reply."""
+    """Reenvía la respuesta del owner (Owner) a un contacto. Llamado desde relay-bot
+    cuando Owner aprieta los botones rápidos del menú usr:* o escribe en pending_reply."""
     from . import agentic
     r = agentic.forward_owner_answer(
         contact_phone=req.contact_phone,
