@@ -110,14 +110,14 @@ def test_ingest_from_url_whitelist_ok():
     cm = _mock_httpx_get(data, "image/jpeg")
     with patch("iris_brain.media.httpx.Client", return_value=cm):
         r = m.ingest_from_url(
-            "https://marketing.simacademy.lat/promo.jpg",
+            "https://marketing.example.com/promo.jpg",
             label="Promo ACLS",
         )
     assert r["id"] is not None
     assert r["mime_type"] == "image/jpeg"
     assert r["source"] == "marketing"
     assert r["label"] == "Promo ACLS"
-    assert r["origin_url"] == "https://marketing.simacademy.lat/promo.jpg"
+    assert r["origin_url"] == "https://marketing.example.com/promo.jpg"
 
 
 def test_ingest_from_url_rechaza_fuera_de_whitelist():

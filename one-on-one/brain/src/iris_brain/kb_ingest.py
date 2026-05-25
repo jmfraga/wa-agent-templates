@@ -22,11 +22,9 @@ from .models import KbFact, KbFactSource
 log = logging.getLogger("iris_brain.kb_ingest")
 
 WHITELIST_DOMAINS: set[str] = {
-    "info.simacademy.lat",
-    "info.emergencias.com.mx",
-    "blog.simacademy.lat",
-    "blog.emergencias.com.mx",
-    "marketing.simacademy.lat",
+    "info.example.com",
+    "blog.example.com",
+    "marketing.example.com",
 }
 
 MAX_HTML_BYTES = 1_000_000  # 1 MB
@@ -69,7 +67,7 @@ def is_whitelisted(url: str) -> bool:
 
 
 def derive_slug(url: str) -> str:
-    """info.simacademy.lat/has-magia-con-claude/ → has-magia-con-claude."""
+    """info.example.com/has-magia-con-claude/ → has-magia-con-claude."""
     try:
         path = urlparse(url).path or ""
     except Exception:  # noqa: BLE001
