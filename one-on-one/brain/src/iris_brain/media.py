@@ -1,7 +1,7 @@
 """Iris media (Phase 1c) — ingest, dedupe, search.
 
 3 fuentes alimentan un storage unificado:
-  - 'marketing'  → URL whitelisted (marketing.simacademy.lat, etc.)
+  - 'marketing'  → URL whitelisted (marketing.example.com, etc.)
   - 'ui_upload'  → drag-drop en /admin/media
   - 'telegram'   → owner manda foto al bot con caption 'guarda como X'
   - 'whatsapp'   → owner manda foto al número WA propio (owner) con caption ingest

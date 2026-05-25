@@ -60,11 +60,9 @@ class Settings(BaseSettings):
     MEDIA_INTERNAL_URL: str = "http://127.0.0.1:8096"
     # Whitelist de dominios para ingest_from_url (marketing).
     MEDIA_WHITELIST_DOMAINS: list[str] = [
-        "marketing.simacademy.lat",
-        "info.simacademy.lat",
-        "info.emergencias.com.mx",
-        "blog.simacademy.lat",
-        "blog.emergencias.com.mx",
+        "marketing.example.com",
+        "info.example.com",
+        "blog.example.com",
     ]
     MEDIA_MAX_BYTES: int = 10 * 1024 * 1024  # 10 MB
 

@@ -188,6 +188,19 @@ sudo systemctl enable --now iris-brain iris-wa-listener iris-relay iris-ui
 sudo journalctl -fu iris-wa-listener   # escanea QR la primera vez
 ```
 
+## Configurar dominios de ingest (KB + media)
+
+Las features de ingest desde URL (KB landing scrape y media outbound) usan whitelists
+estrictas para evitar SSRF. Por defecto están en `example.com`:
+
+- `brain/src/iris_brain/kb_ingest.py` → `WHITELIST_DOMAINS` (para `/courses` → "Procesar URL").
+- `brain/src/iris_brain/config.py` → `MEDIA_WHITELIST_DOMAINS` (para `/admin/media` → "Ingest URL").
+
+Cambia esos conjuntos a tus propios subdominios (`info.tudominio.com`, `blog.tudominio.com`,
+`marketing.tudominio.com`, etc.) **antes** de usar estas features en producción. Los
+placeholders en los templates HTML también referencian `example.com`; ajústalos si quieres
+que tu equipo vea ejemplos reales.
+
 ## Origen
 
 Este template fue derivado de un proyecto privado más amplio ("Iris") usado en producción real. Todo dato personal, número de teléfono, email, host IP y nombre real fue anonimizado o reemplazado con placeholders genéricos antes de la publicación. Si encuentras alguna referencia residual, abre un issue.

@@ -14,13 +14,13 @@ from iris_brain import kb_ingest
 
 
 def test_is_whitelisted_acepta_dominios_conocidos():
-    assert kb_ingest.is_whitelisted("https://info.simacademy.lat/curso/") is True
-    assert kb_ingest.is_whitelisted("https://blog.emergencias.com.mx/post") is True
-    assert kb_ingest.is_whitelisted("https://marketing.simacademy.lat/promo.jpg") is True
+    assert kb_ingest.is_whitelisted("https://info.example.com/curso/") is True
+    assert kb_ingest.is_whitelisted("https://blog.example.com/post") is True
+    assert kb_ingest.is_whitelisted("https://marketing.example.com/promo.jpg") is True
     # http también vale (mismo host)
-    assert kb_ingest.is_whitelisted("http://info.simacademy.lat/") is True
+    assert kb_ingest.is_whitelisted("http://info.example.com/") is True
     # dominio externo NO vale, aunque incluya el host en la query
-    assert kb_ingest.is_whitelisted("https://evil.com/?host=info.simacademy.lat") is False
+    assert kb_ingest.is_whitelisted("https://evil.com/?host=info.example.com") is False
     # input basura
     assert kb_ingest.is_whitelisted("not-a-url") is False
 
@@ -32,14 +32,14 @@ def test_is_whitelisted_acepta_dominios_conocidos():
 
 def test_derive_slug_casos():
     assert (
-        kb_ingest.derive_slug("https://info.simacademy.lat/has-magia-con-claude/")
+        kb_ingest.derive_slug("https://info.example.com/has-magia-con-claude/")
         == "has-magia-con-claude"
     )
-    assert kb_ingest.derive_slug("https://info.simacademy.lat/curso-acls") == "curso-acls"
+    assert kb_ingest.derive_slug("https://info.example.com/curso-acls") == "curso-acls"
     assert (
-        kb_ingest.derive_slug("https://info.simacademy.lat/cursos/avanzado/") == "avanzado"
+        kb_ingest.derive_slug("https://info.example.com/cursos/avanzado/") == "avanzado"
     )
-    assert kb_ingest.derive_slug("https://info.simacademy.lat/page.html") == "page"
+    assert kb_ingest.derive_slug("https://info.example.com/page.html") == "page"
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ def test_extract_with_haiku_parsea_envuelto_en_fences(monkeypatch):
         "Saludos."
     )
     _patch_anthropic_with_text(monkeypatch, wrapped)
-    data = kb_ingest._extract_with_haiku("https://info.simacademy.lat/x/", "Texto fixture")
+    data = kb_ingest._extract_with_haiku("https://info.example.com/x/", "Texto fixture")
     assert data == {
         "nombre": "Curso ACLS",
         "precio": "$3500",
@@ -113,7 +113,7 @@ def test_extract_with_haiku_parsea_envuelto_en_fences(monkeypatch):
 def test_extract_with_haiku_parsea_json_directo(monkeypatch):
     raw = '{"nombre": "Curso BLS", "precio": "$1500"}'
     _patch_anthropic_with_text(monkeypatch, raw)
-    data = kb_ingest._extract_with_haiku("https://info.simacademy.lat/y/", "Texto")
+    data = kb_ingest._extract_with_haiku("https://info.example.com/y/", "Texto")
     assert data == {"nombre": "Curso BLS", "precio": "$1500"}
 
 
@@ -136,7 +136,7 @@ def test_ingest_url_dry_run_no_escribe(monkeypatch):
         lambda url, text: {"nombre": "X", "precio": "$100"},
     )
     r = kb_ingest.ingest_url(
-        "https://info.simacademy.lat/x/", slug="x-slug", dry_run=True
+        "https://info.example.com/x/", slug="x-slug", dry_run=True
     )
     assert r["ok"] is True
     assert r["dry_run"] is True

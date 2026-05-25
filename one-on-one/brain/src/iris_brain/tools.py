@@ -329,7 +329,7 @@ TOOLS: list[dict] = [
     {
         "name": "import_marketing_asset",
         "description": (
-            "Descarga una imagen desde una URL whitelisted (marketing.simacademy.lat, info.*, blog.*) "
+            "Descarga una imagen desde una URL whitelisted (marketing.example.com, info.*, blog.*) "
             "y la guarda como MediaAsset en Iris. Úsalo cuando Owner te dé un link directo a una promo nueva.\n\n"
             "Dedupe automático: si el archivo ya existe (sha256), devuelve el id existente con dedupe=true.\n\n"
             "Devuelve {ok, asset_id, dedupe, label, source, preview_url} o {ok: false, error}."
@@ -342,7 +342,7 @@ TOOLS: list[dict] = [
                 "tags": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Tags ej ['acls','promo','simacademy'].",
+                    "description": "Tags ej ['acls','promo','verano'].",
                 },
             },
             "required": ["url"],
