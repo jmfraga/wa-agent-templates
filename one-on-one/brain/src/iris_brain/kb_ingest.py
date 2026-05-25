@@ -152,17 +152,33 @@ def _extract_with_haiku(url: str, text: str) -> dict[str, str]:
     except anthropic.APIError as e:
         raise KbIngestError("anthropic_error", f"Anthropic API error: {e}")
     raw = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
-    cleaned = raw.strip("`")
-    if cleaned.lower().startswith("json"):
-        cleaned = cleaned[4:].strip()
-    # extraer primer objeto JSON si viene envuelto
-    match = re.search(r"\{.*\}", cleaned, re.S)
-    if match:
-        cleaned = match.group(0)
+    # Intento 1: JSON directo (camino feliz cuando Haiku obedece)
+    data: Any
     try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        raise KbIngestError("bad_json", f"Haiku no devolvió JSON válido: {e}\nRaw: {raw[:500]}")
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # Intento 2: quitar fences ```json ... ``` o ``` ... ```
+        cleaned = raw.strip("`").strip()
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].lstrip()
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            # Intento 3: raw_decode encuentra primer objeto JSON balanceado
+            # (evita el regex .*  greedy que puede capturar texto extra)
+            idx = raw.find("{")
+            if idx < 0:
+                raise KbIngestError(
+                    "bad_json", f"Haiku no devolvió JSON: raw={raw[:500]}"
+                )
+            decoder = json.JSONDecoder()
+            try:
+                data, _end = decoder.raw_decode(raw[idx:])
+            except json.JSONDecodeError as e:
+                raise KbIngestError(
+                    "bad_json",
+                    f"Haiku no devolvió JSON válido: {e}\nRaw: {raw[:500]}",
+                )
     if not isinstance(data, dict):
         raise KbIngestError("bad_json", f"Haiku devolvió tipo {type(data).__name__}, esperaba dict")
     # normalizar: keys conocidas, values string corto
