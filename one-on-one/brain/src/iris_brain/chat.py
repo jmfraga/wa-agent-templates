@@ -6,8 +6,8 @@ Pipeline:
   3. Insertar message in
   4. classify_intent (Haiku)
   5. Si urgencia_clinica → detect_crisis (Sonnet)
-  6. Si crisis → respuesta inmediata + ping Owner urgente
-  7. Si intent requiere Owner → open_ticket + respuesta puente
+  6. Si crisis → respuesta inmediata + ping JMF urgente
+  7. Si intent requiere JMF → open_ticket + respuesta puente
   8. Si info_curso → consulta kb_facts; si hay, responde; si no, ticket
   9. Otros → respuesta directa con SOUL via Haiku + tool-use loop (max 5)
 """
@@ -28,7 +28,7 @@ log = logging.getLogger("iris_brain.chat")
 
 MAX_TOOL_ITERATIONS = 12  # subido para flows owner agénticos (find_media + search_contacts + create_task + N send_outbound[_media] + report_to_owner)
 
-# Intents que siempre escalan a Owner.
+# Intents que siempre escalan a JMF.
 ESCALATE_INTENTS = {"consulta_cita", "info_asesoria", "seguimiento_paciente", "pago_facturacion"}
 
 _client: anthropic.Anthropic | None = None
@@ -63,7 +63,7 @@ def _system_blocks(contact_id: int | None = None, thread_id: int | None = None) 
         ]
         if thread_id is not None:
             lines.insert(1, f"- **thread_id: {thread_id}** (úsalo SIEMPRE así en open_ticket, NO uses el phone)")
-        # contact_id es necesario para tools agentic cuando Owner habla (owner_id en create_task).
+        # contact_id es necesario para tools agentic cuando JMF habla (owner_id en create_task).
         lines.insert(1, f"- **contact_id: {c.id}** (úsalo como owner_id en create_task si eres modo owner)")
         if not c.name:
             lines.append(
@@ -200,7 +200,7 @@ def handle_message(
     model_used = settings.IRIS_BRAIN_MODEL_DEFAULT
     cphone, cname = _contact_card(contact_id)
 
-    # 3.5 Modo owner — Owner dicta instrucciones (agéntico). Bypass safety + intent classify.
+    # 3.5 Modo owner — JMF dicta instrucciones (agéntico). Bypass safety + intent classify.
     # Iris responde con tools agentic (search_contacts, create_task, send_outbound, etc).
     contact_kind = None
     contact_silent_mode = False
@@ -211,7 +211,7 @@ def handle_message(
             contact_silent_mode = bool(getattr(c, "silent_mode", False))
 
     # 3.6 Pausa global o silent_mode global / silent_mode por contacto.
-    # NO aplica al owner — Owner siempre puede dictar instrucciones.
+    # NO aplica al owner — JMF siempre puede dictar instrucciones.
     if contact_kind != "owner":
         from datetime import datetime as _dt, timezone as _tz
         from . import admin as _admin_mod
@@ -224,6 +224,31 @@ def handle_message(
                     pu = pu.replace(tzinfo=_tz.utc)
                 if pu > _dt.now(_tz.utc):
                     log.info("iris paused until %s — skipping reply para phone=%s", pu.isoformat(), contact_phone)
+                    # Fix bug "agujero negro": durante pausa, igual reportar al owner
+                    # y abrir ticket awaiting_jmf para que el mensaje no se pierda.
+                    try:
+                        from . import agentic as _agentic
+                        _agentic.report_to_owner(
+                            f"⏸ <b>{cname or cphone}</b> escribió mientras Iris está pausada "
+                            f"(hasta {pu.strftime('%Y-%m-%d %H:%M UTC')}):\n"
+                            f"<blockquote>{text[:300]}</blockquote>\n"
+                            f"Se abrió ticket awaiting_jmf para que no se pierda.",
+                            contact_phone=cphone,
+                        )
+                    except Exception:  # noqa: BLE001
+                        log.exception("iris_paused report_to_owner falló")
+                    pause_ticket_id: int | None = None
+                    try:
+                        from .tools import _open_ticket as _open_ticket_fn
+                        tres = _open_ticket_fn(
+                            thread_id=thread_id,
+                            kind="pausa_pending",
+                            summary=f"Mensaje recibido durante pausa: {text[:200]}",
+                            draft_for_jmf=None,
+                        )
+                        pause_ticket_id = tres.get("ticket_id")
+                    except Exception:  # noqa: BLE001
+                        log.exception("iris_paused open_ticket falló")
                     return {
                         "ok": True,
                         "thread_id": thread_id,
@@ -231,7 +256,7 @@ def handle_message(
                         "intent": "iris_paused",
                         "intent_confidence": 1.0,
                         "safety": None,
-                        "ticket_id": None,
+                        "ticket_id": pause_ticket_id,
                         "reply": "",
                         "model": "iris_paused",
                         "paused_until": pu.isoformat(),
@@ -368,7 +393,7 @@ def handle_message(
     if active_tt is not None:
         cls = agentic.classify_response(active_tt["message_sent"] or "", text)
         agentic.classify_and_record_response(active_tt["id"], text, cls["classification"])
-        # Reportar a Owner en vivo
+        # Reportar a JMF en vivo
         emoji = {
             "accepted": "✅", "declined": "❌", "maybe": "🤔",
             "clarify": "❓", "other": "💬",
@@ -414,7 +439,7 @@ def handle_message(
     intent_confidence = intent_result["confidence"]
     log.info("intent=%s conf=%.2f phone=%s", intent, intent_confidence, contact_phone)
 
-    # 7. Intents que escalan a Owner: abrimos ticket programáticamente y
+    # 7. Intents que escalan a JMF: abrimos ticket programáticamente y
     # dejamos que Iris genere una respuesta personalizada usando el contexto.
     usage_out: dict | None = None
     if intent in ESCALATE_INTENTS:
@@ -445,10 +470,10 @@ def handle_message(
                 "content": (
                     f"{msgs[-1]['content']}\n\n"
                     f"[nota interna del sistema, NO la repitas: ya abrí el ticket #{ticket_id} "
-                    f"de tipo {intent} con Owner. Solo responde al usuario con una frase puente "
+                    f"de tipo {intent} con JMF. Solo responde al usuario con una frase puente "
                     f"breve (1-2 líneas), personalizada con su nombre si lo sabes, en tono cálido "
                     f"de Iris. Ejemplos: 'Gracias {{nombre}}, déjame checar con el doctor', "
-                    f"'Va, paso el contexto al the owner y te confirmo en cuanto sepa', etc. Varía.]"
+                    f"'Va, paso el contexto al Dr. Fraga y te confirmo en cuanto sepa', etc. Varía.]"
                 ),
             }
         reply, usage_out, _stop = _direct_reply(msgs, contact_id=contact_id, thread_id=thread_id)
