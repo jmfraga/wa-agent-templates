@@ -14,6 +14,8 @@ Pipeline:
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from typing import Any
 
 import anthropic
@@ -30,6 +32,51 @@ MAX_TOOL_ITERATIONS = 12  # subido para flows owner agénticos (find_media + sea
 
 # Intents que siempre escalan a JMF.
 ESCALATE_INTENTS = {"consulta_cita", "info_asesoria", "seguimiento_paciente", "pago_facturacion"}
+
+
+def _strip_accents(s: str) -> str:
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", s) if not unicodedata.combining(ch)
+    )
+
+
+# Phrases/keywords que indican que un colega está REPORTANDO logística
+# (visitante llegó, espera, cita, reagenda, le aviso). Cualquier match → True.
+# Insensible a acentos y mayúsculas.
+_COLEGA_LOGISTICA_PATTERNS = [
+    r"\blleg(o|ó|a|aron|amos|aste|o\b|\b)",  # llego, llegó, llega, llegaron
+    r"\blleg\b",
+    r"\besta\s+esperando\b",
+    r"\bestan\s+esperando\b",
+    r"\besperando\b",
+    r"\bvisit",  # visita, visitante, visitador
+    r"\bcita\s+(con|contigo|con\s+usted|con\s+el\s+dr|con\s+el\s+doctor)",
+    r"\btiene\s+cita\b",
+    r"\breagend",  # reagenda, reagendar, reagende
+    r"\baviso\b",
+    r"\ble\s+aviso\b",
+    r"\bavisa(le|r|me)?\b",
+    r"\bavisale\b",
+    r"\ben\s+recep",  # en recepción, en recepcion
+    r"\ben\s+la\s+recep",
+    r"\ben\s+consulta\b",
+]
+
+_COLEGA_LOGISTICA_RE = re.compile(
+    "|".join(_COLEGA_LOGISTICA_PATTERNS), re.IGNORECASE
+)
+
+
+def _is_colega_logistica(text: str) -> bool:
+    """Detector keyword-based para reportes logísticos de colegas.
+
+    True si el texto contiene ≥1 keyword logística (visitante llegó, espera,
+    cita, reagenda, aviso, en recepción). El llamador valida kind=='colega'.
+    """
+    if not text:
+        return False
+    norm = _strip_accents(text.lower())
+    return bool(_COLEGA_LOGISTICA_RE.search(norm))
 
 _client: anthropic.Anthropic | None = None
 
@@ -334,6 +381,60 @@ def handle_message(
             "intent_confidence": intent_confidence,
             "safety": None,
             "ticket_id": None,
+            "reply": reply,
+            "model": model_used,
+        }
+
+    # 3.7 Colega reporta logística (Phase 1c.fix) — un contacto kind=colega
+    # avisa de un visitante, espera, cita, reagenda, etc. NO devolvemos la
+    # pelota preguntando; abrimos ticket urgente, notificamos al owner con
+    # botones (vía report_to_owner) y mandamos acuse cálido al colega.
+    if contact_kind == "colega" and _is_colega_logistica(text):
+        intent = "colega_logistica"
+        intent_confidence = 1.0
+        model_used = "colega_logistica_ack"
+        tid = tools._open_ticket(
+            thread_id,
+            kind="colega_logistica",
+            summary=text[:300],
+            draft_for_jmf=None,
+        )
+        ticket_id = tid.get("ticket_id")
+        # Notificar al owner con el report (incluye botones via relay-bot).
+        from . import agentic as _agentic_cl
+        notify_text = (
+            f"📢 <b>{cname or cphone}</b> (colega) reporta logística:\n"
+            f"<blockquote>{text[:300]}</blockquote>\n"
+            f"Ticket #{ticket_id} abierto, awaiting_jmf."
+        )
+        try:
+            _agentic_cl.report_to_owner(notify_text, contact_phone=cphone)
+        except Exception:  # noqa: BLE001
+            log.exception("colega_logistica report_to_owner falló")
+        # Acuse cálido al colega (NO pregunta).
+        first_name = ""
+        if cname:
+            first_name = cname.split()[0]
+        reply = (
+            f"Gracias {first_name} 🙏, le aviso al doctor ahora mismo."
+            if first_name
+            else "Gracias 🙏, le aviso al doctor ahora mismo."
+        )
+        sessions.append_message(
+            thread_id, MessageDirection.out, reply, model_used=model_used
+        )
+        log.info(
+            "colega_logistica: contact_id=%s ticket_id=%s phone=%s",
+            contact_id, ticket_id, contact_phone,
+        )
+        return {
+            "ok": True,
+            "thread_id": thread_id,
+            "contact_id": contact_id,
+            "intent": intent,
+            "intent_confidence": intent_confidence,
+            "safety": None,
+            "ticket_id": ticket_id,
             "reply": reply,
             "model": model_used,
         }
