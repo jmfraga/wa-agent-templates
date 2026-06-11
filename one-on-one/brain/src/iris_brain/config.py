@@ -24,7 +24,13 @@ class Settings(BaseSettings):
     IRIS_BRAIN_MAX_HISTORY: int = 30
 
     # --- HTTP ---
-    IRIS_BRAIN_HOST: str = "0.0.0.0"
+    # Default seguro: bind a loopback. Brain, UI, wa-listener y relay-bot
+    # corren en el mismo nodo; exponer a la red dejaría /chat, /tasks/*,
+    # /owner/instruct, /jmf/reply, /contacts sin auth accesibles a cualquier
+    # nodo. Si en el futuro algún componente vive en otra máquina, agregar
+    # `require_admin` (o token interno) a esos endpoints antes de mover el
+    # bind a 0.0.0.0.
+    IRIS_BRAIN_HOST: str = "127.0.0.1"
     IRIS_BRAIN_PORT: int = 8096
 
     # --- Postgres ---
