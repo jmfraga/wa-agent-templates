@@ -19,6 +19,7 @@ import { Boom } from '@hapi/boom';
 import makeWASocket, {
   DisconnectReason,
   downloadMediaMessage,
+  fetchLatestBaileysVersion,
   useMultiFileAuthState,
   type WAMessage,
   type proto,
@@ -325,10 +326,23 @@ function startHttpServer(): void {
 async function startListener(): Promise<void> {
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
+  // Gotcha #2 (Baileys): consultar la versión WA Web más reciente que Baileys
+  // soporta para que el handshake no quede en una versión vieja hardcoded.
+  // Tolerante a fallo de red: si falla, dejamos que Baileys use su default.
+  let version: [number, number, number] | undefined;
+  try {
+    const fetched = await fetchLatestBaileysVersion();
+    version = fetched.version as [number, number, number];
+    log.info({ version, isLatest: fetched.isLatest }, 'fetched WA Web version');
+  } catch (err) {
+    log.warn({ err }, 'fetchLatestBaileysVersion failed, using Baileys default');
+  }
+
   const sock = makeWASocket({
     auth: authState,
     printQRInTerminal: false,
     logger: pino({ level: 'warn' }) as never,
+    ...(version ? { version } : {}),
   });
 
   state.sock = sock;

@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "latest",
+    "@whiskeysockets/baileys": "7.0.0-rc11",
     "dotenv": "^16.4.5",
     "form-data": "^4.0.5",
     "node-fetch": "^3.3.2",
