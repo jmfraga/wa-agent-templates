@@ -65,12 +65,15 @@ def _mark_proactive(group_id: int) -> None:
             s.commit()
 
 
-def _build_system(group_display_name: str, soul: str, kb_summary: Optional[str]) -> str:
+def _build_system(soul: str, kb_summary: Optional[str]) -> str:
+    # NOTA prompt-caching: el system es el prefijo estable (instrucciones + SOUL +
+    # KBs). El nombre del grupo NO va aquí — es contexto del turno y se inyecta en
+    # messages[] (ver classify_relevance), para no romper el prefijo cacheable.
+    # Mínimo cacheable de Haiku 4.5 = 4096 tok: el prefijo sólo cachea con SOUL grande.
     blocks = [
         "Eres el clasificador de relevancia proactiva para Phoenix, un agente "
         "conversacional que opera en grupos de WhatsApp. Tu único trabajo es decidir "
         "si Phoenix debe intervenir EN ESTE MENSAJE sin haber sido mencionado.\n\n",
-        f"Grupo: *{group_display_name}*\n\n",
         "═══════ SOUL DEL GRUPO (scope autorizado de Phoenix) ═══════\n",
         soul.strip(),
         "\n═══════════════════════════════════════════════════════════\n\n",
@@ -166,10 +169,12 @@ def classify_relevance(
             blocked_by_cooldown=True,
         )
 
-    system = _build_system(group_display_name, soul, kb_summary)
+    system = _build_system(soul, kb_summary)
     history_txt = _history_text(history)
+    # El nombre del grupo va en el turno user (contexto), no en el prefijo del system.
     user_block = (
-        (f"Historia reciente del grupo:\n{history_txt}\n---\n" if history_txt else "")
+        f"Grupo: *{group_display_name}*\n\n"
+        + (f"Historia reciente del grupo:\n{history_txt}\n---\n" if history_txt else "")
         + f"Mensaje actual de {current_author}:\n{current_text}"
     )
 
