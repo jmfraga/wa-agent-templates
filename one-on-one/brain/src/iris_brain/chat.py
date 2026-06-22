@@ -6,8 +6,8 @@ Pipeline:
   3. Insertar message in
   4. classify_intent (Haiku)
   5. Si urgencia_clinica → detect_crisis (Sonnet)
-  6. Si crisis → respuesta inmediata + ping JMF urgente
-  7. Si intent requiere JMF → open_ticket + respuesta puente
+  6. Si crisis → respuesta inmediata + ping Owner urgente
+  7. Si intent requiere Owner → open_ticket + respuesta puente
   8. Si info_curso → consulta kb_facts; si hay, responde; si no, ticket
   9. Otros → respuesta directa con SOUL via Haiku + tool-use loop (max 5)
 """
@@ -30,7 +30,7 @@ log = logging.getLogger("iris_brain.chat")
 
 MAX_TOOL_ITERATIONS = 12  # subido para flows owner agénticos (find_media + search_contacts + create_task + N send_outbound[_media] + report_to_owner)
 
-# Intents que siempre escalan a JMF.
+# Intents que siempre escalan a Owner.
 ESCALATE_INTENTS = {"consulta_cita", "info_asesoria", "seguimiento_paciente", "pago_facturacion"}
 
 
@@ -110,7 +110,7 @@ def _system_blocks(contact_id: int | None = None, thread_id: int | None = None) 
         ]
         if thread_id is not None:
             lines.insert(1, f"- **thread_id: {thread_id}** (úsalo SIEMPRE así en open_ticket, NO uses el phone)")
-        # contact_id es necesario para tools agentic cuando JMF habla (owner_id en create_task).
+        # contact_id es necesario para tools agentic cuando Owner habla (owner_id en create_task).
         lines.insert(1, f"- **contact_id: {c.id}** (úsalo como owner_id en create_task si eres modo owner)")
         if not c.name:
             lines.append(
@@ -124,7 +124,18 @@ def _system_blocks(contact_id: int | None = None, thread_id: int | None = None) 
                 "\nSi en este turno queda claro si es paciente, prospecto_curso o asesoria, "
                 "actualiza con `update_contact(phone, kind=...)`."
             )
-        blocks.append({"type": "text", "text": "\n".join(lines)})
+        # 2º breakpoint cache_control: extiende el caché del prefijo (tools+SOUL+ficha)
+        # por contacto, para loops tool-use largos y mensajes consecutivos del mismo
+        # thread en <5min. La ficha sola es chica (<4096), pero como 2º breakpoint
+        # sobre un prefijo acumulado ~12.5k tok sí cachea. IMPORTANTE: la ficha DEBE
+        # ir como ÚLTIMO bloque system y notes_preview debe ser determinista
+        # (notes[-600:]) para no romper el caché del SOUL.
+        # NOTA: el mínimo cacheable de Haiku 4.5 es 4096 tok (NO 2048 como Sonnet).
+        blocks.append({
+            "type": "text",
+            "text": "\n".join(lines),
+            "cache_control": {"type": "ephemeral"},
+        })
     return blocks
 
 
@@ -196,6 +207,18 @@ def _direct_reply(messages: list[dict], contact_id: int | None = None, thread_id
     reply = "\n\n".join(text_chunks).strip()
     stop = response.stop_reason if response else "error"
 
+    # Log de prompt-caching: verifica que el prefijo SOUL+tools+ficha (~12.5k tok)
+    # se está cacheando. Esperado: 1er mensaje del contacto → cache_creation alto,
+    # cache_read=0. Iteraciones del mismo loop y mensajes siguientes en <5min →
+    # cache_read alto, cache_creation~0. Mínimo cacheable Haiku 4.5 = 4096 tok.
+    log.info(
+        "cache: read=%d created=%d input=%d output=%d",
+        usage["cache_read_input_tokens"],
+        usage["cache_creation_input_tokens"],
+        usage["input_tokens"],
+        usage["output_tokens"],
+    )
+
     # Safety net: si TODAS las iteraciones produjeron 0 texto, fuerza una última.
     # Con la nueva acumulación esto debería ser MUY raro.
     if not reply and response and stop in {"end_turn", "tool_use"} and len(messages) > 0:
@@ -247,7 +270,7 @@ def handle_message(
     model_used = settings.IRIS_BRAIN_MODEL_DEFAULT
     cphone, cname = _contact_card(contact_id)
 
-    # 3.5 Modo owner — JMF dicta instrucciones (agéntico). Bypass safety + intent classify.
+    # 3.5 Modo owner — Owner dicta instrucciones (agéntico). Bypass safety + intent classify.
     # Iris responde con tools agentic (search_contacts, create_task, send_outbound, etc).
     contact_kind = None
     contact_silent_mode = False
@@ -258,7 +281,7 @@ def handle_message(
             contact_silent_mode = bool(getattr(c, "silent_mode", False))
 
     # 3.6 Pausa global o silent_mode global / silent_mode por contacto.
-    # NO aplica al owner — JMF siempre puede dictar instrucciones.
+    # NO aplica al owner — Owner siempre puede dictar instrucciones.
     if contact_kind != "owner":
         from datetime import datetime as _dt, timezone as _tz
         from . import admin as _admin_mod
@@ -494,7 +517,7 @@ def handle_message(
     if active_tt is not None:
         cls = agentic.classify_response(active_tt["message_sent"] or "", text)
         agentic.classify_and_record_response(active_tt["id"], text, cls["classification"])
-        # Reportar a JMF en vivo
+        # Reportar a Owner en vivo
         emoji = {
             "accepted": "✅", "declined": "❌", "maybe": "🤔",
             "clarify": "❓", "other": "💬",
@@ -540,7 +563,7 @@ def handle_message(
     intent_confidence = intent_result["confidence"]
     log.info("intent=%s conf=%.2f phone=%s", intent, intent_confidence, contact_phone)
 
-    # 7. Intents que escalan a JMF: abrimos ticket programáticamente y
+    # 7. Intents que escalan a Owner: abrimos ticket programáticamente y
     # dejamos que Iris genere una respuesta personalizada usando el contexto.
     usage_out: dict | None = None
     if intent in ESCALATE_INTENTS:
@@ -571,7 +594,7 @@ def handle_message(
                 "content": (
                     f"{msgs[-1]['content']}\n\n"
                     f"[nota interna del sistema, NO la repitas: ya abrí el ticket #{ticket_id} "
-                    f"de tipo {intent} con JMF. Solo responde al usuario con una frase puente "
+                    f"de tipo {intent} con Owner. Solo responde al usuario con una frase puente "
                     f"breve (1-2 líneas), personalizada con su nombre si lo sabes, en tono cálido "
                     f"de Iris. Ejemplos: 'Gracias {{nombre}}, déjame checar con el doctor', "
                     f"'Va, paso el contexto al Dr. Fraga y te confirmo en cuanto sepa', etc. Varía.]"

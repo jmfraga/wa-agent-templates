@@ -61,7 +61,10 @@ def classify_intent(text: str, history: list[dict] | None = None) -> dict[str, A
         resp = _get_client().messages.create(
             model=settings.IRIS_BRAIN_MODEL_DEFAULT,
             max_tokens=200,
-            system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            # NOTA: _SYSTEM (~250 tok) está bajo el mínimo cacheable de Haiku 4.5 (4096),
+            # así que no marcamos cache_control — sería no-op (cache_creation=0 sin error).
+            # Si en el futuro _SYSTEM crece >4096, reañadir cache_control.
+            system=_SYSTEM,
             messages=msgs,
         )
     except anthropic.APIError as e:

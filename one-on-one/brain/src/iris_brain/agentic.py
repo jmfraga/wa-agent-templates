@@ -1105,7 +1105,10 @@ def classify_response(message_sent: str, response_text: str, anthropic_client=No
         resp = client.messages.create(
             model=settings.IRIS_BRAIN_MODEL_DEFAULT,
             max_tokens=120,
-            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+            # NOTA: system_prompt (~200 tok) está bajo el mínimo cacheable de Haiku 4.5
+            # (4096), así que no marcamos cache_control — sería no-op (cache_creation=0
+            # sin error). Si en el futuro crece >4096, reañadir cache_control.
+            system=system_prompt,
             messages=[{"role": "user", "content": user_msg}],
         )
         raw = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
