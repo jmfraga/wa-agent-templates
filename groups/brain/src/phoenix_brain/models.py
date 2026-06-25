@@ -36,6 +36,12 @@ class Group(Base):
     display_name: Mapped[str] = mapped_column(String(255))
     mode: Mapped[str] = mapped_column(String(32), default="lurker")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Candado de autorización: los grupos nuevos nacen NO autorizados (ver
+    # chat.py::_resolve_group, que lo setea False explícito). Los grupos existentes
+    # quedan autorizados vía la migración ligera (DEFAULT 1). owner_notified evita
+    # repetir el aviso/DM mientras el grupo está pendiente.
+    is_authorized: Mapped[bool] = mapped_column(Boolean, default=True)
+    owner_notified: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     joined_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     last_proactive_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

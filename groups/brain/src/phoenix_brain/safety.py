@@ -175,3 +175,32 @@ def notify_owner(
         return True, None
     except Exception as e:  # noqa: BLE001
         return False, f"listener_unreachable: {e}"
+
+
+def notify_new_group(
+    *,
+    group_display_name: Optional[str],
+    group_jid: str,
+) -> tuple[bool, Optional[str]]:
+    """DM al owner cuando Phoenix entra a un grupo nuevo no autorizado. Reusa el
+    mismo canal que notify_owner (listener `/post-to-jid`). No-op si no hay owner_jid."""
+    if not top.phoenix_owner_jid:
+        return False, "no_owner_jid_configured"
+
+    name = group_display_name or group_jid
+    msg = (
+        "🔒 *Grupo nuevo pendiente de autorización*\n"
+        f"Me agregaron a *{name}*.\n"
+        f"JID: `{group_jid}`\n"
+        "No participaré hasta que lo autorices en la UI "
+        "(Grupos → ese grupo → Autorizar)."
+    )
+
+    url = top.phoenix_listener_url.rstrip("/") + "/post-to-jid"
+    try:
+        r = httpx.post(url, json={"jid": top.phoenix_owner_jid, "text": msg}, timeout=15.0)
+        if r.status_code >= 400:
+            return False, f"listener_status_{r.status_code}"
+        return True, None
+    except Exception as e:  # noqa: BLE001
+        return False, f"listener_unreachable: {e}"

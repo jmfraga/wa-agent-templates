@@ -19,6 +19,11 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, futu
 _LIGHTWEIGHT_MIGRATIONS: list[tuple[str, str, str]] = [
     # (tabla, columna, DDL)
     ("groups", "last_proactive_at", "ALTER TABLE groups ADD COLUMN last_proactive_at DATETIME"),
+    # Candado de autorización. DEFAULT 1 → los grupos existentes quedan autorizados y
+    # marcados como ya notificados (nunca DM por ellos). Los grupos nuevos los crea el
+    # ORM con is_authorized=False / owner_notified=False (ver models.py + chat.py).
+    ("groups", "is_authorized", "ALTER TABLE groups ADD COLUMN is_authorized BOOLEAN NOT NULL DEFAULT 1"),
+    ("groups", "owner_notified", "ALTER TABLE groups ADD COLUMN owner_notified BOOLEAN NOT NULL DEFAULT 1"),
 ]
 
 

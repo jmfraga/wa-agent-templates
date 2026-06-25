@@ -1,0 +1,38 @@
+{% extends "_base.html" %}
+{% block title %}Mensajes · {{g.display_name}}{% endblock %}
+{% block content %}
+<a href="/groups/{{g.wa_jid}}" class="text-sm text-slate-500 hover:text-orange-600">← {{g.display_name}}</a>
+<h1 class="text-2xl font-bold mt-1">Mensajes recientes</h1>
+<div class="text-xs text-slate-500 font-mono mb-4">{{g.wa_jid}}</div>
+
+<div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-50 text-slate-600 text-xs uppercase">
+      <tr>
+        <th class="text-left p-3 whitespace-nowrap">Hora</th>
+        <th class="text-left p-3">Dir</th>
+        <th class="text-left p-3">Quién</th>
+        <th class="text-left p-3">Mensaje</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for m in messages %}
+      <tr class="border-t border-slate-100 align-top">
+        <td class="p-3 whitespace-nowrap text-xs text-slate-500">{{m.ts}}</td>
+        <td class="p-3">
+          {% if m.direction == 'out' %}<span class="badge badge-proactive">Phoenix</span>
+          {% else %}<span class="badge badge-lurker">in</span>{% endif %}
+        </td>
+        <td class="p-3 whitespace-nowrap">
+          {% if m.direction == 'out' %}Phoenix{% else %}{{ m.contact_name or '—' }}{% endif %}
+        </td>
+        <td class="p-3 whitespace-pre-wrap break-words">{{ m.body or '' }}{% if m.media_hint %} <span class="text-xs text-slate-400">[{{m.media_hint}}]</span>{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="p-6 text-center text-slate-500">Sin mensajes registrados todavía.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="text-xs text-slate-400 mt-3">Mostrando los más recientes primero (máx. {{limit}}).</p>
+{% endblock %}

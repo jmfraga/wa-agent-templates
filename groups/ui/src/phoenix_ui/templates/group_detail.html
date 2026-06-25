@@ -1,12 +1,40 @@
 {% extends "_base.html" %}
 {% block title %}{{g.display_name}} · Phoenix{% endblock %}
 {% block content %}
-<a href="/groups" class="text-sm text-slate-500 hover:text-orange-600">← Grupos</a>
+<div class="flex items-center justify-between">
+  <a href="/groups" class="text-sm text-slate-500 hover:text-orange-600">← Grupos</a>
+  <a href="/groups/{{g.wa_jid}}/messages" class="text-sm text-orange-600 hover:underline">Ver mensajes →</a>
+</div>
 <form class="mt-1 flex items-center gap-2" hx-patch="/api/groups/{{g.wa_jid}}/name" hx-swap="none" hx-on::after-request="if(event.detail.successful){this.querySelector('button').textContent='✓'; setTimeout(()=>this.querySelector('button').textContent='Guardar',1500)}">
   <input type="text" name="display_name" value="{{g.display_name}}" class="text-2xl font-bold border-b border-transparent hover:border-slate-300 focus:border-orange-500 focus:outline-none px-1 -mx-1 flex-1 bg-transparent" required>
   <button type="submit" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded">Guardar</button>
 </form>
 <div class="text-xs text-slate-500 font-mono mb-4">{{g.wa_jid}}</div>
+
+<!-- Autorización -->
+<div class="bg-white rounded-lg border shadow-sm p-5 mb-6 {% if not g.is_authorized %}border-amber-300 bg-amber-50{% else %}border-slate-200{% endif %}">
+  <div class="flex items-center justify-between gap-4">
+    <div>
+      <h2 class="font-semibold">Autorización</h2>
+      {% if g.is_authorized %}
+        <p class="text-sm text-green-700 mt-1">✅ Autorizado — Phoenix participa según el modo de abajo.</p>
+      {% else %}
+        <p class="text-sm text-amber-800 mt-1">🔒 Pendiente — Phoenix NO participa en este grupo hasta que lo autorices. Conserva el historial; revísalo en “Ver mensajes”.</p>
+      {% endif %}
+    </div>
+    {% if g.is_authorized %}
+      <form hx-patch="/api/groups/{{g.wa_jid}}/authorize" hx-swap="none" hx-confirm="¿Revocar autorización? Phoenix dejará de participar (queda en silencio, sin borrar)." hx-on::after-request="if(event.detail.successful) window.location.reload()">
+        <input type="hidden" name="is_authorized" value="false">
+        <button class="text-sm bg-amber-100 hover:bg-amber-200 text-amber-800 font-semibold px-3 py-1.5 rounded whitespace-nowrap">Revocar (silenciar)</button>
+      </form>
+    {% else %}
+      <form hx-patch="/api/groups/{{g.wa_jid}}/authorize" hx-swap="none" hx-on::after-request="if(event.detail.successful) window.location.reload()">
+        <input type="hidden" name="is_authorized" value="true">
+        <button class="text-sm bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-2 rounded whitespace-nowrap">Autorizar</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
 
 <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
   <!-- Modo -->

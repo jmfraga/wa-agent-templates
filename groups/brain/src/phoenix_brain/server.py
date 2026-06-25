@@ -52,6 +52,10 @@ class ModeIn(BaseModel):
     mode: str
 
 
+class AuthorizeIn(BaseModel):
+    is_authorized: bool
+
+
 class GroupNameIn(BaseModel):
     display_name: str
 
@@ -151,6 +155,8 @@ def _serialize_group(g: Group, *, with_counts: bool = True, s=None) -> dict:
         "display_name": g.display_name,
         "mode": g.mode,
         "is_active": g.is_active,
+        "is_authorized": g.is_authorized,
+        "owner_notified": g.owner_notified,
         "notes": g.notes,
         "joined_at": g.joined_at.isoformat() if g.joined_at else None,
         "last_proactive_at": g.last_proactive_at.isoformat() if g.last_proactive_at else None,
@@ -168,6 +174,36 @@ def list_groups() -> list[dict]:
     with get_session() as s:
         rows = s.execute(select(Group).order_by(Group.joined_at.desc())).scalars().all()
         return [_serialize_group(g, s=s) for g in rows]
+
+
+@app.get("/groups/{wa_jid:path}/messages")
+def get_group_messages(wa_jid: str, limit: int = 50) -> dict:
+    """Mensajes recientes del grupo (newest-first) para revisión en la UI."""
+    limit = max(1, min(limit, 500))
+    with get_session() as s:
+        g = s.execute(select(Group).where(Group.wa_jid == wa_jid)).scalar_one_or_none()
+        if not g:
+            raise HTTPException(404, "group not found")
+        display_name = g.display_name
+        rows = s.execute(
+            select(Message)
+            .where(Message.group_id == g.id)
+            .order_by(Message.ts.desc())
+            .limit(limit)
+        ).scalars().all()
+        messages = [
+            {
+                "id": m.id,
+                "ts": m.ts.isoformat() if m.ts else None,
+                "direction": m.direction,
+                "contact_name": m.contact_name,
+                "body": m.body,
+                "media_hint": m.media_hint,
+                "model_used": m.model_used,
+            }
+            for m in rows
+        ]
+    return {"wa_jid": wa_jid, "display_name": display_name, "messages": messages}
 
 
 @app.get("/groups/{wa_jid:path}")
@@ -242,6 +278,22 @@ def patch_group_mode(wa_jid: str, payload: ModeIn) -> dict:
         s.commit()
     soul_mod.invalidate_cache(wa_jid)
     return {"status": "ok", "wa_jid": wa_jid, "mode": payload.mode}
+
+
+@app.patch("/groups/{wa_jid:path}/authorize")
+def patch_group_authorize(wa_jid: str, payload: AuthorizeIn) -> dict:
+    """Autoriza (o revoca) la participación de Phoenix en un grupo. Revocar = silenciar
+    sin borrar (conserva historial). Al autorizar se limpia owner_notified para que, si
+    se vuelve a revocar en el futuro, el aviso pueda dispararse de nuevo."""
+    with get_session() as s:
+        g = s.execute(select(Group).where(Group.wa_jid == wa_jid)).scalar_one_or_none()
+        if not g:
+            raise HTTPException(404, "group not found")
+        g.is_authorized = payload.is_authorized
+        if payload.is_authorized:
+            g.owner_notified = False
+        s.commit()
+    return {"status": "ok", "wa_jid": wa_jid, "is_authorized": payload.is_authorized}
 
 
 @app.put("/groups/{wa_jid:path}/soul")

@@ -87,6 +87,16 @@ def groups_page(request: Request):
     return templates.TemplateResponse(request, "groups.html", {"groups": groups})
 
 
+@app.get("/groups/{wa_jid:path}/messages", response_class=HTMLResponse)
+def group_messages_page(request: Request, wa_jid: str, limit: int = 100):
+    data = _brain_get(f"/groups/{wa_jid}/messages", {"limit": limit})
+    return templates.TemplateResponse(
+        request,
+        "group_messages.html",
+        {"g": data, "messages": data.get("messages", []), "limit": limit},
+    )
+
+
 @app.get("/groups/{wa_jid:path}", response_class=HTMLResponse)
 def group_detail_page(request: Request, wa_jid: str):
     g = _brain_get(f"/groups/{wa_jid}")
@@ -250,6 +260,13 @@ async def api_group_mode(wa_jid: str, mode: str = Form(...)):
 @app.patch("/api/groups/{wa_jid:path}/name")
 async def api_group_name(wa_jid: str, display_name: str = Form(...)):
     return _brain_call("PATCH", f"/groups/{wa_jid}/name", json_body={"display_name": display_name})
+
+
+@app.patch("/api/groups/{wa_jid:path}/authorize")
+async def api_group_authorize(wa_jid: str, is_authorized: bool = Form(...)):
+    return _brain_call(
+        "PATCH", f"/groups/{wa_jid}/authorize", json_body={"is_authorized": is_authorized}
+    )
 
 
 @app.delete("/api/groups/{wa_jid:path}")

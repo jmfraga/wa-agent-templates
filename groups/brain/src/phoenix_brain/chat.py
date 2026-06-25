@@ -49,6 +49,14 @@ class _GroupSnapshot:
     id: int
     display_name: str
     mode: str
+    is_authorized: bool
+
+
+# Aviso único que Phoenix publica en un grupo nuevo mientras espera autorización.
+_PENDING_AUTH_NOTICE = (
+    "Hola 👋 Me agregaron a este grupo, pero necesito la autorización de mi owner "
+    "antes de participar. Le avisé; en cuanto me autorice, los acompaño por aquí."
+)
 
 
 def _is_owner(contact_jid: Optional[str]) -> bool:
@@ -67,11 +75,14 @@ def _resolve_group(group_jid: Optional[str]) -> Optional[_GroupSnapshot]:
                 display_name=group_jid.split("@")[0],
                 mode="lurker",
                 is_active=True,
+                is_authorized=False,  # candado: grupo nuevo nace pendiente de autorización
             )
             s.add(g)
             s.commit()
             s.refresh(g)
-        return _GroupSnapshot(id=g.id, display_name=g.display_name, mode=g.mode)
+        return _GroupSnapshot(
+            id=g.id, display_name=g.display_name, mode=g.mode, is_authorized=g.is_authorized
+        )
 
 
 def _upsert_contact(contact_jid: Optional[str], contact_name: Optional[str], is_owner: bool) -> None:
@@ -82,6 +93,28 @@ def _upsert_contact(contact_jid: Optional[str], contact_name: Optional[str], is_
         if ct is None:
             s.add(Contact(wa_jid=contact_jid, display_name=contact_name, is_owner=is_owner))
             s.commit()
+
+
+def _gate_pending_authorization(group: _GroupSnapshot, group_jid: Optional[str]) -> Optional[str]:
+    """Grupo no autorizado: avisa al owner por DM (1 vez) y devuelve el aviso para el
+    grupo (1 vez). Mientras siga pendiente, mensajes posteriores → None (silencio)."""
+    with get_session() as s:
+        g = s.execute(select(Group).where(Group.wa_jid == group_jid)).scalar_one_or_none()
+        if g is None or g.is_authorized:
+            return None  # carrera: autorizado entre el snapshot y aquí
+        if g.owner_notified:
+            return None  # ya avisamos; silencio total hasta autorizar
+        dm_ok, dm_err = safety.notify_new_group(
+            group_display_name=g.display_name, group_jid=g.wa_jid
+        )
+        g.owner_notified = True
+        s.commit()
+    audit.log(
+        "group_pending_authorization",
+        group_jid=group_jid,
+        payload={"display_name": group.display_name, "dm_ok": dm_ok, "dm_err": dm_err},
+    )
+    return _PENDING_AUTH_NOTICE
 
 
 def _accumulate_usage(acc: dict, u: object) -> None:
@@ -109,6 +142,28 @@ def handle_chat(req: ChatRequest) -> ChatResponse:
         quoted_msg_id=req.quoted_msg_id,
         mentions_phoenix=req.mentions_phoenix,
     )
+
+    # Candado de autorización: un grupo nuevo no participa hasta que el owner lo autorice
+    # en la UI. Corre ANTES de gating/safety/proactive/LLM → no gasta tokens. Aplica
+    # también a mensajes del owner (la autorización es por UI, no por chat).
+    if group is not None and not group.is_authorized:
+        notice = _gate_pending_authorization(group, req.group_jid)
+        if notice:
+            record_outbound(
+                group_id=group.id,
+                contact_jid=None,
+                text=notice,
+                model_used="(pending-auth)",
+                tokens_in=0,
+                tokens_out=0,
+            )
+        return ChatResponse(
+            reply=notice,
+            model=None,
+            usage={},
+            gating=GatingDecision(False, "pending_authorization"),
+            tool_calls=[],
+        )
 
     decision = decide(
         group.mode if group else None,

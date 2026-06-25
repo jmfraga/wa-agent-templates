@@ -9,7 +9,7 @@
     <tbody>
     {% for g in groups %}
       <tr class="border-t border-slate-100 hover:bg-slate-50">
-        <td class="p-3 font-medium">{{g.display_name}}</td>
+        <td class="p-3 font-medium">{{g.display_name}}{% if not g.is_authorized %} <span class="ml-1 text-xs font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">🔒 pendiente</span>{% endif %}</td>
         <td class="p-3 text-xs font-mono text-slate-500">{{g.wa_jid}}</td>
         <td class="p-3"><span class="badge badge-{{g.mode}}">{{g.mode}}</span></td>
         <td class="p-3">{{g.counts.kbs}}</td>
