@@ -5,6 +5,7 @@ import {
   Browsers,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
+  normalizeMessageContent,
   useMultiFileAuthState,
   type WAMessage,
   type WASocket,
@@ -75,8 +76,7 @@ type ExtractedMessage = {
   documentSize?: number;
 };
 
-function extractText(m: proto.IWebMessageInfo): ExtractedMessage {
-  const msg = m.message;
+function extractText(msg: proto.IMessage | null | undefined): ExtractedMessage {
   if (!msg) return { text: '' };
   if (msg.conversation) return { text: msg.conversation };
   if (msg.extendedTextMessage?.text) return { text: msg.extendedTextMessage.text };
@@ -168,16 +168,32 @@ async function downloadIfEligible(m: proto.IWebMessageInfo, ext: ExtractedMessag
   }
 }
 
-function detectMention(m: proto.IWebMessageInfo, selfJid: string | null, selfLid: string | null): boolean {
-  const contextInfo =
-    m.message?.extendedTextMessage?.contextInfo ||
-    m.message?.imageMessage?.contextInfo ||
-    m.message?.videoMessage?.contextInfo;
+// contextInfo puede venir en cualquier tipo de mensaje (texto, imagen, video, o
+// DOCUMENTO/PDF). Antes sólo se miraba texto/imagen/video → una mención sobre un PDF
+// no se detectaba. `content` debe venir ya normalizado (sin wrappers).
+function ctxInfo(content: proto.IMessage | null | undefined): proto.IContextInfo | undefined {
+  if (!content) return undefined;
+  return (
+    content.extendedTextMessage?.contextInfo ||
+    content.imageMessage?.contextInfo ||
+    content.videoMessage?.contextInfo ||
+    content.documentMessage?.contextInfo ||
+    undefined
+  );
+}
+
+function detectMention(content: proto.IMessage | null | undefined, selfJid: string | null, selfLid: string | null): boolean {
+  const contextInfo = ctxInfo(content);
   const mentioned = (contextInfo?.mentionedJid || []).map(normalizeJid);
   if (selfJid && mentioned.includes(normalizeJid(selfJid))) return true;
   if (selfLid && mentioned.includes(normalizeJid(selfLid))) return true;
   const text =
-    m.message?.conversation || m.message?.extendedTextMessage?.text || '';
+    content?.conversation ||
+    content?.extendedTextMessage?.text ||
+    content?.imageMessage?.caption ||
+    content?.videoMessage?.caption ||
+    content?.documentMessage?.caption ||
+    '';
   if (/@phoenix\b/i.test(text)) return true;
   // WhatsApp puede escribir el tag como '@<LID-number>' (ej. '@<AGENT_LID>').
   if (selfLid) {
@@ -191,9 +207,9 @@ function detectMention(m: proto.IWebMessageInfo, selfJid: string | null, selfLid
   return false;
 }
 
-function quotedFromSelf(m: proto.IWebMessageInfo, selfJid: string | null): boolean {
+function quotedFromSelf(content: proto.IMessage | null | undefined, selfJid: string | null): boolean {
   if (!selfJid) return false;
-  const ctx = m.message?.extendedTextMessage?.contextInfo;
+  const ctx = ctxInfo(content);
   if (!ctx?.participant) return false;
   return ctx.participant === selfJid;
 }
@@ -239,14 +255,20 @@ async function handleIncoming(m: WAMessage) {
     return;
   }
 
-  const ext = extractText(m);
+  // Desempaquetar wrappers (documentWithCaption [PDF con caption/mención], ephemeral,
+  // viewOnce, edited). SIN esto los PDFs no se veían: WhatsApp los manda como
+  // documentWithCaptionMessage y `documentMessage` quedaba undefined.
+  const content = normalizeMessageContent(m.message);
+  const normMsg = { ...m, message: content } as WAMessage;
+
+  const ext = extractText(content);
   const { text, mediaHint } = ext;
   if (!text && !mediaHint) return;
 
-  const mentionsPhoenix = inGroup ? detectMention(m, myJid, myLid) : true;
-  const quotedIsPhoenix = quotedFromSelf(m, myJid);
+  const mentionsPhoenix = inGroup ? detectMention(content, myJid, myLid) : true;
+  const quotedIsPhoenix = quotedFromSelf(content, myJid);
   const contactName = m.pushName || undefined;
-  const quotedMsgId = m.message?.extendedTextMessage?.contextInfo?.stanzaId || undefined;
+  const quotedMsgId = ctxInfo(content)?.stanzaId || undefined;
 
   // Bajamos binarios solo cuando Phoenix va a procesar el mensaje activamente:
   // mention explícita, reply a Phoenix, o el owner habló. Evita gasto en
@@ -255,7 +277,7 @@ async function handleIncoming(m: WAMessage) {
     (mentionsPhoenix || quotedIsPhoenix || isOwner);
   let media: MediaPayload[] | undefined;
   if (shouldDownloadMedia) {
-    const m1 = await downloadIfEligible(m, ext);
+    const m1 = await downloadIfEligible(normMsg, ext);
     if (m1) media = [m1];
   }
 
