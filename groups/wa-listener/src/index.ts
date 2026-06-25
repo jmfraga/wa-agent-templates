@@ -276,9 +276,30 @@ async function handleIncoming(m: WAMessage) {
   const shouldDownloadMedia = (ext.hasImage || ext.hasDocument) &&
     (mentionsPhoenix || quotedIsPhoenix || isOwner);
   let media: MediaPayload[] | undefined;
+  let mediaFromQuoted = false;
   if (shouldDownloadMedia) {
     const m1 = await downloadIfEligible(normMsg, ext);
     if (m1) media = [m1];
+  } else if (mentionsPhoenix || quotedIsPhoenix) {
+    // El mensaje no trae media propia pero va dirigido a Phoenix (mención/reply).
+    // Si está CITANDO un mensaje con PDF/imagen, baja ESE media. Cubre el patrón
+    // común: mandas el PDF y luego, citándolo, preguntas "@phoenix qué opinas?".
+    const ci = ctxInfo(content);
+    const quotedContent = normalizeMessageContent(ci?.quotedMessage);
+    const qext = extractText(quotedContent);
+    if (qext.hasImage || qext.hasDocument) {
+      const quotedMsg = {
+        key: {
+          remoteJid,
+          id: ci?.stanzaId ?? undefined,
+          fromMe: false,
+          participant: ci?.participant ?? undefined,
+        },
+        message: quotedContent,
+      } as WAMessage;
+      const m1 = await downloadIfEligible(quotedMsg, qext);
+      if (m1) { media = [m1]; mediaFromQuoted = true; }
+    }
   }
 
   log.info(
@@ -289,6 +310,7 @@ async function handleIncoming(m: WAMessage) {
       isOwner,
       mediaHint,
       mediaProcessed: media ? media[0].kind : null,
+      mediaFromQuoted,
       text: text.slice(0, 80),
     },
     'incoming',
