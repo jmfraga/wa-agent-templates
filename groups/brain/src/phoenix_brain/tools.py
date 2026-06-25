@@ -425,7 +425,8 @@ FETCH_URL = {
         "resumir o extraer información. NO bajes URLs proactivamente; sólo "
         "si te lo piden o si necesitas el contexto para responder algo que "
         "te preguntaron. No accede a redes privadas (localhost, 10.x, "
-        "192.168.x, 100.64-127.x Tailscale)."
+        "192.168.x, 100.64-127.x Tailscale). Si una página bloquea el acceso, "
+        "reintenta sola con un lector alterno; el resultado puede traer `via`."
     ),
     "input_schema": {
         "type": "object",
@@ -443,6 +444,10 @@ _USER_AGENT = "Mozilla/5.0 (compatible; PhoenixBot/1.0)"
 _FETCH_TIMEOUT = 10.0
 _TEXT_TRUNCATE = 12000
 _SUPPORTED_CT = ("text/html", "text/plain", "text/markdown", "application/json", "application/xhtml")
+# Fallback de lectura: si el fetch directo falla/bloquea (403, paywall, JS, etc.),
+# reintentamos vía Jina Reader, que devuelve el contenido en texto/markdown limpio.
+_JINA_PREFIX = "https://r.jina.ai/"
+_MIN_USABLE_TEXT = 200  # menos que esto ≈ página bloqueada/vacía → vale la pena el fallback
 
 
 def _is_private_ip(ip_str: str) -> bool:
@@ -488,6 +493,67 @@ def _strip_html(html: str) -> tuple[str, Optional[str]]:
     return text, title
 
 
+_BLOCK_MARKERS = (
+    "just a moment", "captcha", "attention required", "enable javascript",
+    "requiring captcha", "verify you are human", "verifying you are human",
+    "cloudflare", "ddos protection", "access denied",
+)
+
+
+def _looks_blocked(text: str) -> bool:
+    """Heurística: ¿el texto extraído es en realidad una página de bloqueo (CAPTCHA/JS)
+    o está vacío? Un artículo largo que sólo mencione 'captcha' NO cuenta como bloqueo."""
+    t = (text or "").strip().lower()
+    if len(t) < _MIN_USABLE_TEXT:
+        return True
+    if len(t) < 1500 and any(m in t for m in _BLOCK_MARKERS):
+        return True
+    return False
+
+
+def _fetch_extract(fetch_target: str, canonical_url: str) -> dict:
+    """Descarga `fetch_target` y extrae texto. `canonical_url` es la URL que se
+    reporta al usuario (la original, aunque se haya bajado vía un proxy/reader)."""
+    try:
+        r = httpx.get(
+            fetch_target,
+            timeout=_FETCH_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": _USER_AGENT, "Accept": "text/html,application/xhtml+xml,text/plain,*/*;q=0.5"},
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "reason": "fetch_failed", "error": str(e)[:200]}
+
+    if r.status_code >= 400:
+        return {"ok": False, "reason": "http_error", "status_code": r.status_code}
+
+    ct = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if not any(ct.startswith(s) for s in _SUPPORTED_CT):
+        return {"ok": False, "reason": "unsupported_content_type", "content_type": ct, "status_code": r.status_code}
+
+    body = r.text or ""
+    title = None
+    if ct.startswith(("text/html", "application/xhtml")):
+        text, title = _strip_html(body)
+    else:
+        text = body
+
+    truncated = len(text) > _TEXT_TRUNCATE
+    if truncated:
+        text = text[:_TEXT_TRUNCATE] + " … [truncado]"
+
+    return {
+        "ok": True,
+        "url": canonical_url,
+        "final_url": str(r.url),
+        "title": title,
+        "text": text,
+        "status_code": r.status_code,
+        "truncated": truncated,
+        "content_type": ct,
+    }
+
+
 def _handle_fetch_url(args: dict, ctx: ToolContext) -> dict:
     url = (args.get("url") or "").strip()
     if not url:
@@ -516,43 +582,30 @@ def _handle_fetch_url(args: dict, ctx: ToolContext) -> dict:
     if cached and cached[1] > now:
         return cached[0]
 
-    try:
-        r = httpx.get(
-            url,
-            timeout=_FETCH_TIMEOUT,
-            follow_redirects=True,
-            headers={"User-Agent": _USER_AGENT, "Accept": "text/html,application/xhtml+xml,text/plain,*/*;q=0.5"},
-        )
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "reason": "fetch_failed", "error": str(e)[:200]}
+    # Intento 1: fetch directo.
+    res = _fetch_extract(url, url)
 
-    ct = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
-    if not any(ct.startswith(s) for s in _SUPPORTED_CT):
-        return {"ok": False, "reason": "unsupported_content_type", "content_type": ct, "status_code": r.status_code}
+    # Intento 2 (sólo si el primero no sirvió): Jina Reader. La URL original ya pasó el
+    # guard SSRF arriba; r.jina.ai es público. Bypassea bloqueos (403/paywall/JS).
+    if (not res.get("ok")) or _looks_blocked(res.get("text", "")):
+        jina_res = _fetch_extract(_JINA_PREFIX + url, url)
+        if jina_res.get("ok") and not _looks_blocked(jina_res.get("text", "")):
+            jina_res["via"] = "jina_reader"
+            res = jina_res
 
-    body = r.text or ""
-    title = None
-    if ct.startswith(("text/html", "application/xhtml")):
-        text, title = _strip_html(body)
-    else:
-        text = body
+    # Honestidad: si lo que quedó "ok" sigue siendo una página-bloqueo (CAPTCHA/JS),
+    # no la relayes como contenido — repórtala como ilegible.
+    if res.get("ok") and _looks_blocked(res.get("text", "")):
+        res = {
+            "ok": False,
+            "reason": "blocked_unreadable",
+            "url": url,
+            "status_code": res.get("status_code"),
+            "note": "La página exige CAPTCHA/JS; no se pudo leer ni directo ni vía lector.",
+        }
 
-    truncated = len(text) > _TEXT_TRUNCATE
-    if truncated:
-        text = text[:_TEXT_TRUNCATE] + " … [truncado]"
-
-    result = {
-        "ok": True,
-        "url": url,
-        "final_url": str(r.url),
-        "title": title,
-        "text": text,
-        "status_code": r.status_code,
-        "truncated": truncated,
-        "content_type": ct,
-    }
-    _URL_CACHE[url] = (result, now + _URL_CACHE_TTL)
-    return result
+    _URL_CACHE[url] = (res, now + _URL_CACHE_TTL)
+    return res
 
 
 # ── Registry ────────────────────────────────────────────────────────
