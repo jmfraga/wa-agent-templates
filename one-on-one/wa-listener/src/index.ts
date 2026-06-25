@@ -20,6 +20,7 @@ import makeWASocket, {
   DisconnectReason,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
+  normalizeMessageContent,
   useMultiFileAuthState,
   type WAMessage,
   type proto,
@@ -94,6 +95,7 @@ function extractText(msg: proto.IMessage | null | undefined): string {
     msg.extendedTextMessage?.text ??
     msg.imageMessage?.caption ??
     msg.videoMessage?.caption ??
+    msg.documentMessage?.caption ??
     ''
   );
 }
@@ -395,8 +397,14 @@ async function startListener(): Promise<void> {
       const jid = m.key.remoteJid;
       if (!jid) continue;
 
-      const text = extractText(m.message);
-      const mediaHint = extractMediaHint(m.message);
+      // Desempaquetar wrappers de WhatsApp (documentWithCaption [PDF/imagen con caption],
+      // ephemeral [chats temporales], viewOnce, edited). SIN esto los PDFs/imágenes con
+      // caption no se veían: WA los manda como documentWithCaptionMessage y
+      // documentMessage/imageMessage quedaban undefined → el mensaje se descartaba.
+      const content = normalizeMessageContent(m.message);
+
+      const text = extractText(content);
+      const mediaHint = extractMediaHint(content);
 
       if (!text && !mediaHint) continue;
 
@@ -406,15 +414,15 @@ async function startListener(): Promise<void> {
       // Si quien manda es el owner Y trae imagen (imageMessage o documentMessage image/*),
       // descargamos el blob vía Baileys y lo subimos a brain /media/upload.
       // No pasamos por brain /chat para este flujo (evita dead code).
-      const imageMsg = m.message?.imageMessage;
-      const docMsg = m.message?.documentMessage;
+      const imageMsg = content?.imageMessage;
+      const docMsg = content?.documentMessage;
       const docIsImage = !!(docMsg && (docMsg.mimetype || '').startsWith('image/'));
       const hasIngestableMedia = !!imageMsg || docIsImage;
 
       if (hasIngestableMedia && isOwnerPhone(contact_phone)) {
         try {
           const buffer = (await downloadMediaMessage(
-            m,
+            { ...m, message: content } as WAMessage,
             'buffer',
             {},
             {
