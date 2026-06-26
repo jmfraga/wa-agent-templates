@@ -162,6 +162,10 @@ async def contact_update(
 @app.get("/contact/{phone}", response_class=HTMLResponse)
 async def contact_detail(request: Request, phone: str) -> HTMLResponse:
     data = await brain_client.get_contact(phone)
+    try:
+        expediente = (await brain_client.get_contact_media(phone)).get("items", [])
+    except Exception:  # noqa: BLE001 — expediente best-effort; no romper la ficha
+        expediente = []
     return _render(
         request,
         "contact.html",
@@ -171,6 +175,7 @@ async def contact_detail(request: Request, phone: str) -> HTMLResponse:
             "thread": data.get("thread") or {},
             "messages": data.get("messages") or [],
             "tickets": data.get("tickets") or [],
+            "expediente": expediente,
             "brain_offline": data.get("brain_offline", False),
         },
     )

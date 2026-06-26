@@ -96,6 +96,27 @@ def _to_dict(m: MediaAsset) -> dict[str, Any]:
     }
 
 
+def list_for_contact(phone: str) -> dict[str, Any]:
+    """Expediente: documentos/imágenes asociados a un contacto (uploaded_by_contact_id)."""
+    from .models import Contact
+    from .sessions import sanitize_phone
+
+    p = sanitize_phone(phone)
+    with get_session() as s:
+        contact = s.scalar(select(Contact).where(Contact.phone == p))
+        if contact is None:
+            return {"contact_phone": p, "items": []}
+        rows = s.scalars(
+            select(MediaAsset)
+            .where(
+                MediaAsset.uploaded_by_contact_id == contact.id,
+                MediaAsset.deleted_at.is_(None),
+            )
+            .order_by(MediaAsset.created_at.desc())
+        ).all()
+        return {"contact_phone": p, "items": [_to_dict(m) for m in rows]}
+
+
 def _existing_by_sha(s, sha: str) -> MediaAsset | None:
     return s.scalar(select(MediaAsset).where(MediaAsset.sha256 == sha))
 

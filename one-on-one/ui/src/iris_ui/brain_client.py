@@ -131,6 +131,10 @@ class BrainClient:
         # TODO(Owner): confirm exact brain route shape; assuming /contacts/{phone}.
         return await self._get(f"/contacts/{phone}")
 
+    async def get_contact_media(self, phone: str) -> dict[str, Any]:
+        """Expediente del contacto (CRM): documentos/imágenes que ha enviado."""
+        return await self._get(f"/contacts/{phone}/media")
+
     async def list_tickets(self, status: str | None = None) -> dict[str, Any]:
         params: dict[str, Any] = {}
         if status:

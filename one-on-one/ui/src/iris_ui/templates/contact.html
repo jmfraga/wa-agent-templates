@@ -132,5 +132,28 @@
     <p class="text-sm text-slate-400">Sin tickets.</p>
     {% endif %}
   </div>
+
+  <div class="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
+    <h2 class="text-sm font-semibold text-slate-700 mb-3">📁 Expediente <span class="text-slate-400 font-normal">— documentos enviados por el contacto</span></h2>
+    {% if expediente %}
+    <ul class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for a in expediente %}
+      <li class="border border-slate-200 rounded-md p-2 text-xs">
+        <a href="/media/{{ a.id }}" target="_blank" rel="noopener" class="block">
+          {% if a.mime_type and a.mime_type.startswith('image/') %}
+          <img src="/media/{{ a.id }}" alt="{{ a.label or a.filename }}" class="rounded mb-2 max-h-40 w-full object-contain bg-slate-50" />
+          {% else %}
+          <div class="flex items-center justify-center h-24 bg-slate-50 rounded mb-2 text-3xl">📄</div>
+          {% endif %}
+          <div class="font-medium text-slate-800 truncate">{{ a.label or a.filename }}</div>
+        </a>
+        <div class="text-[10px] text-slate-500 mt-1">{{ a.mime_type }} · {{ a.created_at }}</div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-sm text-slate-400">Sin documentos en el expediente.</p>
+    {% endif %}
+  </div>
 </section>
 {% endblock %}

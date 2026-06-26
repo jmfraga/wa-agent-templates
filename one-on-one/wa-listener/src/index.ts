@@ -502,6 +502,74 @@ async function startListener(): Promise<void> {
       // pushname = nombre de display del contacto en WA (mejor que un LID anónimo)
       const pushname = (m as { pushName?: string }).pushName?.trim();
 
+      // ─── Media de CONTACTO → expediente (CRM) + aviso al owner ──────
+      // Si un contacto (no-owner) manda PDF/imagen (propia o citada), la archivamos en
+      // su expediente (brain /media/upload con contact_phone) y avisamos al owner.
+      // Acuse neutral; skip /chat. (Versión genérica CRM, sin interpretar el contenido.)
+      if (!isOwnerPhone(contact_phone)) {
+        const contactPhone = real_phone || contact_phone;
+        let dlMsg: WAMessage | null = null;
+        let mMime = '';
+        let mName = '';
+        let mCaption = '';
+        if (imageMsg) {
+          dlMsg = { ...m, message: content } as WAMessage;
+          mMime = imageMsg.mimetype || 'image/jpeg';
+          mName = `wa-${m.key.id ?? 'img'}.jpg`;
+          mCaption = imageMsg.caption ?? text ?? '';
+        } else if (docMsg) {
+          dlMsg = { ...m, message: content } as WAMessage;
+          mMime = docMsg.mimetype || 'application/octet-stream';
+          mName = docMsg.fileName || `wa-${m.key.id ?? 'doc'}`;
+          mCaption = docMsg.caption ?? text ?? '';
+        } else {
+          const ci = content?.extendedTextMessage?.contextInfo
+            ?? content?.imageMessage?.contextInfo
+            ?? content?.videoMessage?.contextInfo
+            ?? content?.documentMessage?.contextInfo;
+          const quoted = normalizeMessageContent(ci?.quotedMessage);
+          const qImg = quoted?.imageMessage;
+          const qDoc = quoted?.documentMessage;
+          if (qImg || qDoc) {
+            dlMsg = {
+              key: { remoteJid: jid, id: ci?.stanzaId ?? undefined, fromMe: false, participant: ci?.participant ?? undefined },
+              message: quoted,
+            } as WAMessage;
+            mMime = qImg ? (qImg.mimetype || 'image/jpeg') : (qDoc?.mimetype || 'application/octet-stream');
+            mName = qImg ? `wa-${ci?.stanzaId ?? 'img'}.jpg` : (qDoc?.fileName || `wa-${ci?.stanzaId ?? 'doc'}`);
+            mCaption = text ?? '';
+          }
+        }
+        const supported = mMime.startsWith('image/') || mMime === 'application/pdf';
+        if (dlMsg && supported) {
+          try {
+            const buffer = (await downloadMediaMessage(
+              dlMsg, 'buffer', {}, { logger: log as never, reuploadRequest: sock.updateMediaMessage },
+            )) as Buffer;
+            const FormData = (await import('form-data')).default;
+            const form = new FormData();
+            form.append('file', buffer, { filename: mName, contentType: mMime });
+            form.append('source', 'whatsapp');
+            form.append('contact_phone', contactPhone);
+            form.append('notify_owner', 'true');
+            if (mCaption) form.append('label', mCaption.slice(0, 200));
+            const res = await fetch(`${BRAIN_URL}/media/upload`, {
+              method: 'POST',
+              body: form as unknown as NodeJS.ReadableStream,
+              headers: form.getHeaders(),
+            });
+            if (res.ok) {
+              log.info({ contact_phone: contactPhone, mime: mMime }, 'contact media archived to expediente');
+              await sock.sendMessage(jid, { text: '📎 Recibí tu documento, gracias. Lo revisamos y te contactamos.' });
+              continue;
+            }
+            log.error({ status: res.status, contact_phone: contactPhone }, 'contact media upload failed; falling through to /chat');
+          } catch (err) {
+            log.error({ err, contact_phone: contactPhone }, 'contact media ingest failed; falling through to /chat');
+          }
+        }
+      }
+
       log.info({ contact_phone, jid, real_phone, pushname, hasMedia: !!mediaHint, len: text.length }, 'incoming');
 
       const payload: BrainChatRequest & { pushname?: string; real_phone?: string } = {

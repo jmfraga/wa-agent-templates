@@ -6,7 +6,7 @@ from typing import Any
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -1163,12 +1163,31 @@ def media_ingest_url(req: MediaIngestUrlRequest) -> dict[str, Any]:
         raise HTTPException(code_to_status.get(e.code, 400), str(e))
 
 
+def _notify_owner_contact_doc(*, contact_phone: str, asset: dict[str, Any]) -> None:
+    """Background: avisa al owner (Telegram) que un contacto envió un documento.
+    Versión CRM genérica: NO interpreta el contenido (eso es específico de cada vertical)."""
+    from . import agentic
+
+    label = asset.get("label") or asset.get("filename") or "documento"
+    text = (
+        f"📎 *{contact_phone}* envió un documento: {label} (id={asset.get('id')}).\n"
+        "Archivado en su expediente."
+    )
+    try:
+        agentic.report_to_owner(text, contact_phone=contact_phone)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("notify owner contact doc failed")
+
+
 @app.post("/media/upload")
 async def media_upload(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     source: str = Form("ui_upload"),
     label: str | None = Form(None),
     tags: str | None = Form(None),  # JSON-encoded list o coma-separados
+    contact_phone: str | None = Form(None),  # asocia el asset al expediente del contacto
+    notify_owner: bool = Form(False),  # si True, avisa al owner (Telegram)
 ) -> dict[str, Any]:
     from . import media as media_mod
     import json as _json
@@ -1196,14 +1215,19 @@ async def media_upload(
         except Exception:
             parsed_tags = [t.strip() for t in tags.split(",") if t.strip()]
 
+    uploaded_by_contact_id: int | None = None
+    if contact_phone:
+        uploaded_by_contact_id = sessions.upsert_contact(contact_phone)
+
     try:
-        return media_mod.ingest_from_bytes(
+        asset = media_mod.ingest_from_bytes(
             data=data,
             mime_type=mime,
             source=source,
             label=label,
             tags=parsed_tags,
             filename_hint=file.filename,
+            uploaded_by_contact_id=uploaded_by_contact_id,
         )
     except media_mod.MediaError as e:
         code_to_status = {
@@ -1213,6 +1237,17 @@ async def media_upload(
             "empty": 400,
         }
         raise HTTPException(code_to_status.get(e.code, 400), str(e))
+
+    if notify_owner and contact_phone:
+        background_tasks.add_task(_notify_owner_contact_doc, contact_phone=contact_phone, asset=asset)
+    return asset
+
+
+@app.get("/contacts/{phone}/media")
+def contact_media(phone: str) -> dict[str, Any]:
+    """Expediente del contacto (CRM): documentos/imágenes que ha enviado."""
+    from . import media as media_mod
+    return media_mod.list_for_contact(phone)
 
 
 @app.get("/media/{asset_id}/raw")
