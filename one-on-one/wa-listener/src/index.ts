@@ -356,7 +356,7 @@ async function startListener(): Promise<void> {
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
       state.lastQr = qr;
-      log.warn('QR recibido — abre http://100.71.128.102:8099/qr en navegador para escanearlo');
+      log.warn('QR recibido — abre http://<tailscale-ip>:8099/qr en navegador para escanearlo');
       qrcode.generate(qr, { small: true });
     }
     if (connection === 'open') {

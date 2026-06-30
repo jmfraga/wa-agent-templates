@@ -459,7 +459,7 @@ def _is_private_ip(ip_str: str) -> bool:
         return True
     if ip.is_private:
         return True
-    # Tailscale CGNAT: 100.64.0.0/10
+    # Tailscale CGNAT: <tailscale-ip>/10
     if isinstance(ip, ipaddress.IPv4Address):
         if int(ip) >> 22 == (100 << 24 | 64 << 16) >> 22:
             return True

@@ -1,6 +1,6 @@
 # Deploy Phoenix v2 a RPi5 <ECOSYSTEM>
 
-Host: `<user>@<HOST_IP>` (raspberrypi-de-juanma).
+Host: `<user>@<HOST_IP>` (<pi-host>).
 
 > **Nota cutover**: el número actual de Phoenix en <ECOSYSTEM> es +521XXXXXXXXXX. Mientras pruebas, pair contra un número *sandbox* primero. Sólo cuando confirmes que Phoenix v2 funciona bien en grupos de prueba, paras Phoenix en <ECOSYSTEM> (`openclaw agents stop phoenix`) y re-pair con el número real.
 
